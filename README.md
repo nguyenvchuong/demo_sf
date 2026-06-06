@@ -151,7 +151,7 @@ Four downstream tasks are registered with `mjlab.tasks.registry` (importing
 ```bash
 #pretrain 
 uv run scripts/pretrain.py \
-  --data-dir dataset_mini/npz \
+  --data-dir dataset_mini/npz_gu \
   --norm-stats-file dataset_mini/norm_stats.npz
 # Train (checkpoints land under logs/)
 uv run scripts/train.py Smp-Forward-mini --env.scene.num-envs=4 
