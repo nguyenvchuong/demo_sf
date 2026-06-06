@@ -20,7 +20,7 @@ from smp.sampling.feature_to_state import (
   slice_features,
 )
 
-NUM_JOINTS = 29
+NUM_JOINTS = 23
 
 
 def _maybe_compile(model, compile_model: bool, compile_mode: str | None):

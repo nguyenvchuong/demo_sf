@@ -88,11 +88,10 @@ mv datasets/csv/_lafan_dl/g1/*.csv datasets/csv/lafan/
 ### CSV → windowed NPZ
 
 ```bash
-uv run scripts/csv_to_npz.py \
-  --input-dir datasets/csv/lafan \
-  --output-dir datasets/npz/lafan
+uv run scripts/csv_to_npz_mini.py \
+  --input-dir dataset_mini/csv \
+  --output-dir dataset_mini/npz
 ```
-
 For each CSV this replays the motion through the G1 sim, forward-kinematics the
 tracked end-effectors, interpolates 30 → 50 fps, and slices the result into
 **pelvis-anchored, yaw-only** windows of shape `(N, window_size, 59)` — one `.npz`
@@ -108,8 +107,8 @@ corpus across parallel runs.
 
 ```bash
 uv run scripts/compute_norm_stats.py \
-  --input-dir datasets/npz/lafan \
-  --output datasets/norm_stats.npz
+  --input-dir dataset_mini/npz \
+  --output dataset_mini/norm_stats.npz
 ```
 
 This concatenates every window under `--input-dir` and writes per-feature
@@ -150,11 +149,15 @@ Four downstream tasks are registered with `mjlab.tasks.registry` (importing
 ### Train / play
 
 ```bash
+#pretrain 
+uv run scripts/pretrain.py \
+  --data-dir dataset_mini/npz \
+  --norm-stats-file dataset_mini/norm_stats.npz
 # Train (checkpoints land under logs/)
-uv run scripts/train.py Smp-Forward-G1 --env.scene.num-envs=4096
+uv run scripts/train.py Smp-Forward-mini --env.scene.num-envs=4096
 
 # Play a trained policy from a W&B run
-uv run scripts/play.py Smp-Forward-G1 --wandb-run-path <org>/<project>/<run> --num-envs 4
+uv run scripts/play.py Smp-Forward-mini --checkpoint-file <link pt> --num-envs 1
 ```
 
 Swap the task id for any of the four. Because the priors are shipped and already
@@ -168,6 +171,7 @@ Every task uses a single **multiplicative** reward term, `task_smp_product`:
 r  =  ( Σᵢ wᵢ · taskᵢ(s) )  ×  r_smp(s)
 ```
 
+-
 where `r_smp = exp(−wₛ/|K| · Σ_{i∈K} ‖ε̂_i − ε_i‖²)` is the SDS guidance reward
 (the frozen denoiser's ε-prediction error at a fixed set of diffusion timesteps
 `K`, per-timestep normalized).

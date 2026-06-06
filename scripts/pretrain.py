@@ -149,11 +149,11 @@ def pretrain(cfg: PretrainCfg) -> Path:
   save_dir = Path(cfg.log_dir) / cfg.name / timestamp
   save_dir.mkdir(parents=True, exist_ok=True)
 
-  wandb_run = None
-  if cfg.use_wandb:
-    import wandb
+  # wandb_run = None
+  # if cfg.use_wandb:
+  #   import wandb
 
-    wandb_run = wandb.init(project=cfg.wandb_project, name=cfg.name, config=vars(cfg))
+  #   wandb_run = wandb.init(project=cfg.wandb_project, name=cfg.name, config=vars(cfg))
 
   for epoch in range(cfg.num_epochs):
     model.train()
@@ -183,16 +183,16 @@ def pretrain(cfg: PretrainCfg) -> Path:
         eval_model, scheduler, val_loader, device, pin_memory, cfg.num_noise_samples
       )
       print(f"Epoch {epoch:4d} | train={avg_loss:.6f} | val={val_loss:.6f}")
-      if wandb_run is not None:
-        wandb_run.log({"epoch": epoch, "train/loss": avg_loss, "val/loss": val_loss})
+      # if wandb_run is not None:
+      #   wandb_run.log({"epoch": epoch, "train/loss": avg_loss, "val/loss": val_loss})
 
     if epoch % cfg.save_interval == 0 or epoch == cfg.num_epochs - 1:
       ckpt_path = save_dir / f"checkpoint_{epoch:05d}.pt"
       _save_checkpoint(
         ckpt_path, epoch, model, dataset, feature_dim, cfg, optimizer, ema
       )
-      if wandb_run is not None:
-        wandb_run.save(str(ckpt_path), base_path=str(save_dir))
+      # if wandb_run is not None:
+      #   wandb_run.save(str(ckpt_path), base_path=str(save_dir))
 
   final_path = save_dir / "pretrained.pt"
   _save_checkpoint(
@@ -200,9 +200,9 @@ def pretrain(cfg: PretrainCfg) -> Path:
   )
   print(f"Saved final checkpoint to {final_path}")
 
-  if wandb_run is not None:
-    wandb_run.save(str(final_path), base_path=str(save_dir))
-    wandb_run.finish()
+  # if wandb_run is not None:
+  #   wandb_run.save(str(final_path), base_path=str(save_dir))
+  #   wandb_run.finish()
 
   return final_path
 

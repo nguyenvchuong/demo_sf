@@ -18,7 +18,7 @@ from mjlab.utils.lab_api.math import (
   yaw_quat,
 )
 
-NUM_JOINTS = 29
+NUM_JOINTS = 23
 
 # Tracked end-effector bodies. ``torso_link`` proxies the head (mjlab's G1
 # asset has no separate head body, but the head is rigidly attached to the

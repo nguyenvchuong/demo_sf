@@ -12,8 +12,8 @@ class PretrainCfg:
   """Configuration for diffusion model pretraining."""
 
   # Data
-  data_dir: str = "datasets/npz"
-  norm_stats_file: str = "datasets/norm_stats.npz"
+  data_dir: str = "datasets_mini/npz"
+  norm_stats_file: str = "datasets_mini/norm_stats.npz"
   """Path to q01/q99 quantile stats from compute_norm_stats.py."""
   train_split: float = 0.9
 
