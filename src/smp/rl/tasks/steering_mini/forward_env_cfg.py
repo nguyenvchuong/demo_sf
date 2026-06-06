@@ -58,14 +58,17 @@ def mini_forward_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
   # --- Events --------------------------------------------------------------
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "logs/pretrain/pretrain/20260606_084545/checkpoint_00000.pt"
+    "logs/pretrain/pretrain/20260606_121844/checkpoint_00300.pt"
   )
 
   # --- Terminations --------------------------------------------------------
+  # Mini_M1v1: pelvis_link starts at z=0.8m; standing pelvis height ~0.37m.
+  # 0.3m is too close to standing height — tightens false terminations.
+  # Use 0.15m so only a real collapse (knees on ground) triggers this.
   cfg.terminations["base_too_low"] = TerminationTermCfg(
     func=mdp.root_height_below_minimum,
     params={
-      "minimum_height": 0.3,
+      "minimum_height": 0.15,
       "asset_cfg": SceneEntityCfg("robot"),
     },
   )

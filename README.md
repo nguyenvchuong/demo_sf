@@ -154,10 +154,10 @@ uv run scripts/pretrain.py \
   --data-dir dataset_mini/npz \
   --norm-stats-file dataset_mini/norm_stats.npz
 # Train (checkpoints land under logs/)
-uv run scripts/train.py Smp-Forward-mini --env.scene.num-envs=4096
+uv run scripts/train.py Smp-Forward-mini --env.scene.num-envs=4 
 
 # Play a trained policy from a W&B run
-uv run scripts/play.py Smp-Forward-mini --checkpoint-file <link pt> --num-envs 1
+uv run scripts/play.py Smp-Forward-mini --checkpoint-file logs/rsl_rl/smp_forward_mini/2026-06-06_14-17-18_smp_forward_mini/model_2000.pt --num-envs 1
 ```
 
 Swap the task id for any of the four. Because the priors are shipped and already

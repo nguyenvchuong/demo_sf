@@ -377,10 +377,16 @@ def mini_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   rewards: dict[str, RewardTermCfg] = {}
 
   # --- Sensors -------------------------------------------------------------
+  # Self-collision: upper body (torso subtree = shoulders/arms/wrists) vs
+  # lower body (pelvis + hips + legs). This catches arm-vs-leg or arm-vs-arm
+  # contacts without false-positives from feet touching the ground.
+  # NOTE: pelvis_link is the root body of Mini_M1v1 — subtree("pelvis_link")
+  # covers the ENTIRE robot including feet, which fire on every ground contact.
+  # Using subtree("torso_link") restricts to the upper body only.
   self_collision_cfg = ContactSensorCfg(
     name="self_collision",
-    primary=ContactMatch(mode="subtree", pattern="pelvis_link", entity="robot"),
-    secondary=ContactMatch(mode="subtree", pattern="pelvis_link", entity="robot"),
+    primary=ContactMatch(mode="subtree", pattern="torso_link", entity="robot"),
+    secondary=ContactMatch(mode="subtree", pattern="torso_link", entity="robot"),
     fields=("found",),
     reduce="none",
     num_slots=1,

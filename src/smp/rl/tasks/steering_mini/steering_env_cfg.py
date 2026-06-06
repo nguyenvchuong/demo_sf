@@ -67,7 +67,7 @@ def mini_steering_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.terminations["base_too_low"] = TerminationTermCfg(
     func=mdp.root_height_below_minimum,
     params={
-      "minimum_height": 0.3,
+      "minimum_height": 0.15,
       "asset_cfg": SceneEntityCfg("robot"),
     },
   )
