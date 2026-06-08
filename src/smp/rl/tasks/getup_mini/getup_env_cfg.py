@@ -43,8 +43,12 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.scene.entities["robot"].spec_fn = get_mini_spec_with_head
 
   # --- Events --------------------------------------------------------------
+  # pretrained_getup_f2s2.pt is feature_dim=59 (G1, 29 DOF) — incompatible with
+  # Mini (feature_dim=53, 23 DOF). Use the mini checkpoint until a dedicated
+  # Mini getup pretrain is available. Replace this path once you have trained:
+  #   uv run scripts/pretrain.py --data-dir dataset_mini/npz_getup ...
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "datasets/pretrain_ckpt/pretrained_getup_f2s2.pt"
+    "logs/pretrain/pretrain/20260606_181755/pretrained.pt"
   )
   cfg.events["reset_stand_counter"] = EventTermCfg(
     func=mdp.reset_stand_counter, mode="reset"
@@ -62,7 +66,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
           mdp.upward_velocity,
           0.7,
           {
-            "target_velocity": 0.25,
+            "target_velocity": 0.35,
             "head_height_threshold": HEAD_UP_THRESHOLD,
             "scale": 100.0,
           },
