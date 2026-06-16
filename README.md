@@ -84,6 +84,9 @@ mv datasets/csv/_lafan_dl/g1/*.csv datasets/csv/lafan/
 
 > `csv_to_npz.py` globs `*.csv` **non-recursively**, so the CSV files must sit
 > directly under `--input-dir` (not in a nested `g1/`).
+### NPZ AMASS → windowed CSV
+
+uv run scripts/npz_to_csv.py dir --input-dir data_mini_npz/ --output-dir data_mini_npz/csv/
 
 ### CSV → windowed NPZ
 
