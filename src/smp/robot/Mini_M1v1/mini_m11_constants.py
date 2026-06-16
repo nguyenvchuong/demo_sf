@@ -63,7 +63,7 @@ ARMATURE_EC_A4310_P2_36H = 0.023328       # shoulder, elbow, wrist, ankle
 #   velocity_limit=22.0,
 #   effort_limit=5.0,
 # )
-NATURAL_FREQ = 6.0 * 2.0 * 3.1415926535  # 10Hz
+NATURAL_FREQ = 4.0 * 2.0 * 3.1415926535  # 10Hz
 DAMPING_RATIO = 1.2
  
 STIFFNESS_EC_A8116_P1_18H = ARMATURE_EC_A8116_P1_18H * NATURAL_FREQ**2
