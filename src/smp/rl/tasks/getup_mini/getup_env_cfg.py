@@ -95,29 +95,42 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # Always-on: rotate the torso upright from ANY pose (core getup signal).
         (
           mdp.upright_progress,
-          0.30,
+          0.25,
           {"scale": 1.0},
         ),
         # Always-on: drive the head toward standing height.
         (
           mdp.track_head_height,
-          0.25,
+          0.20,
           {"target_height": HEAD_TARGET_HEIGHT, "scale": 1.0},
         ),
         # Rising phase: drive head upward quickly until near-standing height.
         (
           mdp.upward_velocity,
-          0.20,
+          0.15,
           {
             "target_velocity": 0.40,
             "head_height_threshold": HEAD_UP_THRESHOLD,
             "scale": 100.0,
           },
         ),
-        # Rolling phase: reward active sagittal/lateral angular velocity.
+        # PROACTIVE roll: once the torso tilts past recovery (CoM outside the
+        # support polygon), reward rolling angular momentum — triggered by TILT
+        # while still up high, so the robot commits to a roll instead of a rigid
+        # flat fall. This is the term that makes it roll when pushed over.
+        (
+          mdp.proactive_roll,
+          0.20,
+          {
+            "tilt_threshold": 0.6,
+            "target_ang_vel": 2.0,
+            "scale": 0.5,
+          },
+        ),
+        # On-ground rolling: keep rotating once already low (head < threshold).
         (
           mdp.roll_momentum,
-          0.15,
+          0.10,
           {
             "target_ang_vel": 1.5,
             "scale": 1.0,

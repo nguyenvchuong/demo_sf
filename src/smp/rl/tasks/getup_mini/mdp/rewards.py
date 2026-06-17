@@ -20,6 +20,7 @@ __all__ = [
   "upward_velocity",
   "soft_landing",
   "roll_momentum",
+  "proactive_roll",
 ]
 
 
@@ -103,6 +104,38 @@ def soft_landing(
   falling = torch.clamp(-base_vz, min=0.0)
   shaped = torch.exp(-scale * falling * falling)
   return torch.where(head_z < head_floor_threshold, shaped, torch.ones_like(shaped))
+
+
+def proactive_roll(
+  env: ManagerBasedRlEnv,
+  tilt_threshold: float = 0.6,
+  target_ang_vel: float = 2.0,
+  scale: float = 0.5,
+) -> torch.Tensor:
+  """Reward converting a COMMITTED topple into a roll — triggered by TILT, not height.
+
+  Tilt = ``‖projected_gravity_b[:, :2]‖`` = sin(lean angle): 0 when upright, 1
+  when the torso is horizontal.  Once tilt exceeds ``tilt_threshold`` the CoM has
+  left the foot support polygon and the fall can no longer be arrested by
+  balancing — resisting it rigidly produces a hard flat impact.  At that point
+  this term rewards horizontal angular-velocity magnitude ``|ω_xy|`` reaching
+  ``target_ang_vel``, i.e. *going with* the rotation and tucking into a roll
+  rather than fighting it.
+
+  Unlike ``roll_momentum`` (gated on head height, so it only fires once already
+  low) this is gated on tilt, so it fires while the robot is still up high — the
+  PROACTIVE trigger.  A rigid robot that resists the fall has low ``|ω_xy|`` and
+  is penalised; a robot that rolls has high ``|ω_xy|`` and scores ~1.  Returns
+  1.0 below the threshold so balanced standing is never disturbed.  The tilt
+  gate means the term cannot be farmed by spinning while still upright.
+  """
+  robot = env.scene["robot"]
+  tilt = torch.norm(robot.data.projected_gravity_b[:, :2], dim=-1)
+  ang_xy = robot.data.root_link_ang_vel_w[:, :2]
+  ang_mag = torch.norm(ang_xy, dim=-1)
+  shortfall = torch.clamp(ang_mag - target_ang_vel, max=0.0)
+  shaped = torch.exp(-scale * shortfall * shortfall)
+  return torch.where(tilt > tilt_threshold, shaped, torch.ones_like(shaped))
 
 
 def roll_momentum(
