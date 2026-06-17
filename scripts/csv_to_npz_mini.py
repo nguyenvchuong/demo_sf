@@ -31,7 +31,6 @@ from mjlab.entity import Entity
 from mjlab.scene import Scene
 from mjlab.scripts.csv_to_npz import MotionLoader as CsvMotionLoader
 from mjlab.sim.sim import Simulation, SimulationCfg
-from mjlab.tasks.tracking.config.mini.env_cfgs import mini_flat_tracking_env_cfg
 from mjlab.utils.lab_api.math import (
   matrix_from_quat,
   quat_apply_inverse,
@@ -108,11 +107,14 @@ class Cfg:
 
 def _setup_sim(device: str) -> tuple[Simulation, Scene]:
   """Build the mini sim once."""
-  sim_cfg = SimulationCfg()
-  env_cfg = mini_flat_tracking_env_cfg()
-  scene = Scene(env_cfg.scene, device=device)
+  from mjlab.scene.scene import SceneCfg
+
+  from smp.robot.Mini_M1v1.mini_m11_constants import get_mini_m1v1_robot_cfg
+
+  scene_cfg = SceneCfg(entities={"robot": get_mini_m1v1_robot_cfg()})
+  scene = Scene(scene_cfg, device=device)
   model = scene.compile()
-  sim = Simulation(num_envs=1, cfg=sim_cfg, model=model, device=device)
+  sim = Simulation(num_envs=1, cfg=SimulationCfg(), model=model, device=device)
   scene.initialize(sim.mj_model, sim.model, sim.data)
   return sim, scene
 

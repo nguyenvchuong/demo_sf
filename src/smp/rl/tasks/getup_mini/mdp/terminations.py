@@ -5,7 +5,34 @@ from __future__ import annotations
 import torch
 from mjlab.envs import ManagerBasedRlEnv
 
-__all__ = ["smp_too_low", "stood_up"]
+__all__ = ["smp_too_low", "stood_up", "diverged"]
+
+
+def diverged(
+  env: ManagerBasedRlEnv,
+  max_lin_speed: float = 25.0,
+  max_ang_speed: float = 40.0,
+) -> torch.Tensor:
+  """Terminate a physically diverging env BEFORE it produces NaN observations.
+
+  Contact-solver blow-ups (from self/ground penetration in flailing or invalid
+  GSI poses) ramp the root speed up over a few control steps — 1e1 → 1e3 → 1e8 →
+  inf → NaN — long before any plausible real motion (≲8 m/s).  Terminating the
+  instant the speed leaves the sane envelope resets the env one step earlier than
+  the divergence reaches ``inf``, so the NaN never enters the returned obs.
+
+  This is independent of the SMP score (unlike ``smp_too_low``), so a genuinely
+  fallen-but-stable, low-speed pose is NOT killed — only runaway physics is.
+  Also catches any non-finite root state directly as a backstop.
+  """
+  robot = env.scene["robot"]
+  lin = robot.data.root_link_lin_vel_w
+  ang = robot.data.root_link_ang_vel_w
+  lin_speed = torch.linalg.norm(lin, dim=-1)
+  ang_speed = torch.linalg.norm(ang, dim=-1)
+  bad = (lin_speed > max_lin_speed) | (ang_speed > max_ang_speed)
+  nonfinite = ~(torch.isfinite(lin).all(dim=-1) & torch.isfinite(ang).all(dim=-1))
+  return bad | nonfinite
 
 
 def stood_up(

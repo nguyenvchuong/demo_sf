@@ -1,6 +1,12 @@
-"""Reward components for the getup task: head-height + up-velocity.
+"""Reward components for the ukemi + getup task.
 
-Combined and SMP-gated via the generic ``smp.rl.rewards.smp_product``.
+Phase structure (Mini ~0.68 m standing head height):
+  Phase 1 — impact    (head < ~0.30 m): ``soft_landing``   rewards low fall speed
+  Phase 1–2 — rolling (head < ~0.42 m): ``roll_momentum``  rewards active rolling
+  Phase 2–3 — standup (head rising):    ``upward_velocity`` + ``track_head_height``
+
+All phase terms return 1.0 outside their active window so they do not compete.
+Combined and SMP-gated via ``smp.rl.rewards.task_smp_product``.
 """
 
 from __future__ import annotations
@@ -9,9 +15,35 @@ import torch
 from mjlab.envs import ManagerBasedRlEnv
 
 __all__ = [
+  "upright_progress",
   "track_head_height",
   "upward_velocity",
+  "soft_landing",
+  "roll_momentum",
 ]
+
+
+def upright_progress(
+  env: ManagerBasedRlEnv,
+  scale: float = 1.0,
+) -> torch.Tensor:
+  """Ungated monotonic getup potential from torso orientation.
+
+  ``projected_gravity_b[:, 2]`` is the body-frame z of the gravity vector:
+  ``-1`` when perfectly upright, ``0`` when horizontal (lying on side / falling
+  over), ``+1`` when fully inverted.  Maps it to ``[0, 1]`` via
+  ``((1 − g_z)/2)^scale`` so the reward rises smoothly and monotonically as the
+  torso rotates from inverted → flat → upright **from any pose**.
+
+  This is the term that carries the lying→standing gradient.  Unlike the
+  phase-gated / SMP-gated terms it is ALWAYS active and never multiplied to
+  zero off-manifold, so the policy always has a signal pulling it upright while
+  it is on the ground.  ``scale`` > 1 sharpens the reward near upright.
+  """
+  robot = env.scene["robot"]
+  g_z = robot.data.projected_gravity_b[:, 2]
+  uprightness = torch.clamp((1.0 - g_z) * 0.5, 0.0, 1.0)
+  return uprightness.pow(scale)
 
 
 def track_head_height(
@@ -21,7 +53,7 @@ def track_head_height(
 ) -> torch.Tensor:
   """Reward the ``head`` site reaching ``target_height``:
   ``exp(-scale·max(target_height − head_z, 0)²)`` (no penalty for overshoot).
-  Needs the ``head`` site from ``getup_env_cfg.get_g1_spec_with_head``."""
+  Needs the ``head`` site from ``getup_env_cfg.get_mini_spec_with_head``."""
   robot = env.scene["robot"]
   head_idx = robot.find_sites(["head"], preserve_order=True)[0][0]
   z = robot.data.site_pos_w[:, head_idx, 2]
@@ -31,14 +63,13 @@ def track_head_height(
 
 def upward_velocity(
   env: ManagerBasedRlEnv,
-  target_velocity: float = 0.25,
-  head_height_threshold: float = 0.6,
+  target_velocity: float = 0.40,
+  head_height_threshold: float = 0.50,
   scale: float = 100.0,
 ) -> torch.Tensor:
-  """Reward upward HEAD velocity below ``head_height_threshold`` (else ``1``):
+  """Reward upward HEAD velocity while below ``head_height_threshold`` (else 1).
   ``exp(-scale·max(target_velocity − head_vz, 0)²)``.  Uses the head site's world
-  velocity (``site_lin_vel_w``, includes ω×r from torso pitch) so it drives the
-  head, not the pelvis.  Needs ``getup_env_cfg.get_g1_spec_with_head``."""
+  velocity so it drives the whole-body rising motion, not just the pelvis."""
   robot = env.scene["robot"]
   head_idx = robot.find_sites(["head"], preserve_order=True)[0][0]
   head_z = robot.data.site_pos_w[:, head_idx, 2]
@@ -50,3 +81,50 @@ def upward_velocity(
     shaped,
     torch.ones_like(shaped),
   )
+
+
+def soft_landing(
+  env: ManagerBasedRlEnv,
+  scale: float = 4.0,
+  head_floor_threshold: float = 0.30,
+) -> torch.Tensor:
+  """Reward low downward pelvis speed during the impact phase (head < threshold).
+
+  Encourages the robot to absorb the fall by rolling rather than resisting
+  rigidly.  ``exp(-scale·max(-v_z, 0)²)`` gives 1.0 when stationary or rising
+  and decays sharply for high falling speed.  Returns 1.0 above threshold so
+  it does not interfere with the standup phase.
+  """
+  robot = env.scene["robot"]
+  head_idx = robot.find_sites(["head"], preserve_order=True)[0][0]
+  head_z = robot.data.site_pos_w[:, head_idx, 2]
+  base_vz = robot.data.root_link_lin_vel_w[:, 2]
+  # positive = falling down
+  falling = torch.clamp(-base_vz, min=0.0)
+  shaped = torch.exp(-scale * falling * falling)
+  return torch.where(head_z < head_floor_threshold, shaped, torch.ones_like(shaped))
+
+
+def roll_momentum(
+  env: ManagerBasedRlEnv,
+  target_ang_vel: float = 1.5,
+  scale: float = 1.0,
+  head_roll_threshold: float = 0.42,
+) -> torch.Tensor:
+  """Reward active rolling (sagittal + lateral angular velocity) while on the ground.
+
+  Rolling transfers fall energy through time rather than absorbing it as a
+  sudden impact spike.  Rewards the horizontal angular velocity magnitude
+  (pitch + roll components, not yaw) reaching ``target_ang_vel`` rad/s.
+  ``exp(-scale·max(target_ang_vel − |ω_xy|, 0)²)`` → 1.0 when rolling well.
+  Returns 1.0 above threshold so it does not penalise the upright robot.
+  """
+  robot = env.scene["robot"]
+  head_idx = robot.find_sites(["head"], preserve_order=True)[0][0]
+  head_z = robot.data.site_pos_w[:, head_idx, 2]
+  # world-frame x (roll) and y (pitch) — exclude yaw which is not ukemi motion
+  ang_xy = robot.data.root_link_ang_vel_w[:, :2]
+  ang_mag = torch.norm(ang_xy, dim=-1)
+  shortfall = torch.clamp(ang_mag - target_ang_vel, max=0.0)
+  shaped = torch.exp(-scale * shortfall * shortfall)
+  return torch.where(head_z < head_roll_threshold, shaped, torch.ones_like(shaped))

@@ -82,9 +82,22 @@ def task_smp_product(
   task_terms: tuple[TaskTerm, ...],
   fixed_timesteps: tuple[int, ...] = (8, 15, 22),
   ws: float = 6.0,
+  smp_floor: float = 0.0,
 ) -> torch.Tensor:
-  """``(Σ wᵢ · taskᵢ(env)) · r_smp`` — multiplicative SMP gating; ``task_terms`` is
-  a tuple of ``(func, weight, kwargs)``.  Calls ``smp_guidance_reward`` once (the
-  sole SMP-buffer update), so it must be the task's only SMP reward term."""
+  """``(Σ wᵢ · taskᵢ(env)) · gate`` where ``gate = smp_floor + (1−smp_floor)·r_smp``.
+
+  ``task_terms`` is a tuple of ``(func, weight, kwargs)``.  Calls
+  ``smp_guidance_reward`` once (the sole SMP-buffer update), so it must be the
+  task's only SMP reward term.
+
+  ``smp_floor`` (∈ [0, 1]) is the multiplicative floor on the SMP gate:
+    * ``0.0`` → pure multiplicative gating (off-manifold states earn nothing).
+    * ``>0``  → off-manifold states still earn ``smp_floor · task``, so there is
+      always a task-reward gradient (essential for getup/recovery, where the
+      starting pose is *necessarily* off the prior's manifold), while on-manifold
+      motion still earns the full ``×1`` style bonus.
+  """
   task = sum(w * func(env, **kw) for func, w, kw in task_terms)
-  return task * smp_guidance_reward(env, fixed_timesteps=fixed_timesteps, ws=ws)
+  r_smp = smp_guidance_reward(env, fixed_timesteps=fixed_timesteps, ws=ws)
+  gate = smp_floor + (1.0 - smp_floor) * r_smp
+  return task * gate

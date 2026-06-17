@@ -23,6 +23,9 @@ HEAD_POS_IN_TORSO: tuple[float, float, float] = (0.0, 0.0, 0.31)
 HEAD_TARGET_HEIGHT: float = 0.65        # track_head_height goal (just below full stand)
 HEAD_UP_THRESHOLD: float = 0.50         # upward_velocity: drive while head below this
 HEAD_STOOD_UP: float = 0.62             # stood_up: success threshold
+# Ukemi-specific thresholds.
+HEAD_FLOOR_THRESHOLD: float = 0.30      # soft_landing: below = impact/contact phase
+HEAD_ROLL_THRESHOLD: float = 0.42       # roll_momentum: below = active rolling phase
 
 
 def get_mini_spec_with_head() -> mujoco.MjSpec:  # type: ignore[attr-defined]
@@ -48,30 +51,88 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # Mini getup pretrain is available. Replace this path once you have trained:
   #   uv run scripts/pretrain.py --data-dir dataset_mini/npz_getup ...
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "logs/pretrain/pretrain/20260606_181755/pretrained.pt"
+    "logs/pretrain/pretrain/20260617_104242/pretrained.pt"
   )
   cfg.events["reset_stand_counter"] = EventTermCfg(
     func=mdp.reset_stand_counter, mode="reset"
   )
 
+  # NOTE: the shared push (±0.5 m/s) is kept as-is. GSI already seeds a fraction
+  # of episodes directly in fallen/rolling poses (the prior's manifold reaches
+  # root_z≈0.12, fully inverted), which is the main roll-to-getup practice — so
+  # we do NOT need an aggressive push, and a strong push only risks contact
+  # blow-ups. Revisit (modestly) only once training is confirmed stable.
+
   # --- Rewards -------------------------------------------------------------
-  # task = 0.7·upward_velocity + 0.3·head_height, gated by SMP.
-  # Thresholds scaled to Mini (~0.68 m standing head height vs G1 ~1.7 m).
+  # Ukemi + quick-standup reward (all terms ∈ [0,1], weights sum to 1).
+  #
+  # The reward is SMP-gated with a FLOOR (``smp_floor``): the gate is
+  #   gate = smp_floor + (1 - smp_floor) · r_smp ∈ [smp_floor, 1].
+  # A pure ×r_smp gate collapses to ~0 in fallen/off-manifold poses (the single
+  # rolling clip's manifold is a thin tube dominated by standing), which leaves
+  # the policy with NO gradient out of the exact states a getup task must escape.
+  # The floor keeps ``smp_floor · task`` flowing off-manifold while on-manifold
+  # rolling still earns the full ×1 style bonus.
+  #
+  # Term roles:
+  #   upright_progress  — ALWAYS-ON monotonic potential (torso orientation).
+  #                       This is the spine of the lying→standing gradient and
+  #                       is never gated to a single phase, so the policy always
+  #                       has a signal pulling it upright off the floor.
+  #   track_head_height — ALWAYS-ON: stand tall.
+  #   upward_velocity   — phase (head < HEAD_UP_THRESHOLD): rise QUICKLY.
+  #   roll_momentum     — phase (head < HEAD_ROLL_THRESHOLD): roll to spread impact.
+  #   soft_landing      — phase (head < HEAD_FLOOR_THRESHOLD): absorb the fall.
+  #
+  # Phase terms return 1.0 outside their window → no cross-phase interference;
+  # the two always-on terms carry the global getup gradient.
   cfg.rewards["task_smp_product"] = RewardTermCfg(
     func=task_smp_product,
     weight=1.0,
     params={
+      "smp_floor": 0.3,
       "task_terms": (
+        # Always-on: rotate the torso upright from ANY pose (core getup signal).
+        (
+          mdp.upright_progress,
+          0.30,
+          {"scale": 1.0},
+        ),
+        # Always-on: drive the head toward standing height.
+        (
+          mdp.track_head_height,
+          0.25,
+          {"target_height": HEAD_TARGET_HEIGHT, "scale": 1.0},
+        ),
+        # Rising phase: drive head upward quickly until near-standing height.
         (
           mdp.upward_velocity,
-          0.7,
+          0.20,
           {
-            "target_velocity": 0.35,
+            "target_velocity": 0.40,
             "head_height_threshold": HEAD_UP_THRESHOLD,
             "scale": 100.0,
           },
         ),
-        (mdp.track_head_height, 0.3, {"target_height": HEAD_TARGET_HEIGHT, "scale": 1.0}),
+        # Rolling phase: reward active sagittal/lateral angular velocity.
+        (
+          mdp.roll_momentum,
+          0.15,
+          {
+            "target_ang_vel": 1.5,
+            "scale": 1.0,
+            "head_roll_threshold": HEAD_ROLL_THRESHOLD,
+          },
+        ),
+        # Impact phase: reward soft (rolling) landing — penalise hard fall speed.
+        (
+          mdp.soft_landing,
+          0.10,
+          {
+            "scale": 4.0,
+            "head_floor_threshold": HEAD_FLOOR_THRESHOLD,
+          },
+        ),
       ),
     },
   )
@@ -81,9 +142,26 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # triggers from the robot lying on the ground.
   cfg.terminations.pop("self_collision", None)
 
+  # smp_too_low guards against the "violent unphysical getup" exploit, but for a
+  # getup task the START pose is necessarily off-manifold, so it must NOT fire
+  # during the recovery itself.  With the floored SMP gate the violent shortcut
+  # is already much less rewarding, so we relax this hard: a lower threshold + a
+  # long grace window (≈1 s at 50 Hz) only terminates on a SUSTAINED, deeply
+  # degenerate collapse, leaving the policy time to roll up.
   cfg.terminations["smp_too_low"] = TerminationTermCfg(
     func=mdp.smp_too_low,
-    params={"threshold": 0.02, "ws": 6.0, "grace_steps": 5},
+    params={"threshold": 0.005, "ws": 6.0, "grace_steps": 50},
+  )
+
+  # Physics-divergence guard: terminate runaway contact blow-ups (root speed
+  # leaving the sane envelope) BEFORE they reach NaN. Independent of the SMP
+  # score, so it kills only diverging physics — not stable fallen poses — which
+  # lets ``smp_too_low`` stay relaxed (grace 50) for recovery learning. Without
+  # this, the relaxed ``smp_too_low`` no longer resets flailing poses early
+  # enough and the contact solver runs away to NaN in the actor observation.
+  cfg.terminations["diverged"] = TerminationTermCfg(
+    func=mdp.diverged,
+    params={"max_lin_speed": 25.0, "max_ang_speed": 40.0},
   )
 
   # Truncate (time_out=True) once stably upright so value bootstraps correctly.
