@@ -160,7 +160,7 @@ uv run scripts/pretrain.py \
 uv run scripts/train.py Smp-Getup-mini --env.scene.num-envs=4096
 
 # Play a trained policy from a W&B run
-uv run scripts/play.py Smp-Forward-mini --checkpoint-file logs/rsl_rl/smp_forward_mini/2026-06-06_14-17-18_smp_forward_mini/model_2000.pt --num-envs 1
+uv run scripts/play.py --task Smp-Getup-mini --checkpoint-file logs/rsl_rl/smp_getup_mini/2026-06-17_14-25-48_smp_getup_mini/model_29999.pt --num-envs 1 --to-onnx
 ```
 
 Swap the task id for any of the four. Because the priors are shipped and already

@@ -51,7 +51,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # Mini getup pretrain is available. Replace this path once you have trained:
   #   uv run scripts/pretrain.py --data-dir dataset_mini/npz_getup ...
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "logs/pretrain/pretrain/20260617_104242/pretrained.pt"
+    "logs/pretrain/pretrain/20260606_181755/pretrained.pt"
   )
   cfg.events["reset_stand_counter"] = EventTermCfg(
     func=mdp.reset_stand_counter, mode="reset"
