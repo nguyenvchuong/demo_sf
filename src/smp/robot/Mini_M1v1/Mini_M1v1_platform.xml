@@ -1,0 +1,36 @@
+<mujoco model="minim1 platform">
+  <!-- Mini_M1v1 + a static box platform, for the jump_platform_mini task
+       ("jump from a box down to the floor, then safety-roll").
+
+       Height (0.25 m) and footprint are sized from the
+       jump_form_box_to_safety_roll_* mocap clips in dataset_mini/chuong_data:
+       mean starting pelvis height across 24 clips is 1.021 m, vs. the robot's
+       normal standing pelvis height of 0.77 m (KNEES_BENT_KEYFRAME) →
+       box height ≈ 0.25 m.
+
+       This is a separate file (not an edit to Mini_M1v1.xml) so the box does
+       NOT appear in other Mini_M1v1 tasks (getup_mini, steering_mini, ...),
+       which all load Mini_M1v1.xml directly via get_spec(). Wire this file
+       into a task via a dedicated spec_fn, e.g.:
+         cfg.scene.entities["robot"].spec_fn = get_mini_platform_spec
+
+       The world/ground plane itself is provided by the env's own
+       TerrainEntityCfg(terrain_type="plane"), not by this file — only the
+       box geom is added here, so it gets placed (and replicated per env)
+       relative to the robot's own body frame via mjlab's entity wrapping. -->
+  <include file="Mini_M1v1.xml"/>
+
+  <asset>
+    <material name="platform" rgba="0.55 0.55 0.6 1" reflectance="0.1"/>
+  </asset>
+
+  <worldbody>
+    <!-- Box platform: top at z=0.25, centered under the robot's spawn point.
+         1.0 m x 1.0 m footprint — generous for the Mini's small (~0.3 m)
+         stance, with room to walk to an edge before jumping off. -->
+    <body name="platform" pos="0 0 0.125">
+      <geom name="platform_box" type="box" material="platform"
+        friction="1.0 0.01 0.001" size="0.5 0.5 0.125"/>
+    </body>
+  </worldbody>
+</mujoco>

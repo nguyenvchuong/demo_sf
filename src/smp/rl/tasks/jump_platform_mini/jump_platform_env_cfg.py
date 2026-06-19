@@ -1,6 +1,18 @@
-"""Mini_M1v1 getup task with SMP guidance."""
+"""Mini_M1v1 jump-platform task with SMP guidance.
+
+The robot starts standing on a static box platform (see
+``Mini_M1v1_platform.xml``) and must step/jump off it down to the floor, then
+recover — guided by an SMP prior trained on the
+``jump_form_box_to_safety_roll_*`` mocap clips (``roll_platform_pretrained.pt``).
+The reward/termination shape is shared with ``getup_mini`` (impact → roll →
+stand-up phases): jumping off a platform and recovering from a fall is the
+same getup problem with a different starting condition.
+"""
 
 from __future__ import annotations
+
+import dataclasses
+from pathlib import Path
 
 import mujoco
 from mjlab.envs import ManagerBasedRlEnvCfg
@@ -11,7 +23,9 @@ from mjlab.managers.termination_manager import TerminationTermCfg
 from smp.rl.env_cfg import mini_smp_env_cfg
 from smp.rl.rewards import task_smp_product
 from smp.rl.tasks.getup_mini import mdp
-from smp.robot.Mini_M1v1.mini_m11_constants import get_spec as _get_mini_spec
+from smp.robot.Mini_M1v1.mini_m11_constants import KNEES_BENT_KEYFRAME
+
+_PLATFORM_XML = Path("src/smp/robot/Mini_M1v1/Mini_M1v1_platform.xml")
 
 # Mini_M1v1 geometry (from Mini_M1v1.xml):
 #   torso_link at pos="0 0 0" relative to pelvis_link (same height).
@@ -27,31 +41,54 @@ HEAD_STOOD_UP: float = 0.62             # stood_up: success threshold
 HEAD_FLOOR_THRESHOLD: float = 0.30      # soft_landing: below = impact/contact phase
 HEAD_ROLL_THRESHOLD: float = 0.42       # roll_momentum: below = active rolling phase
 
+# Platform geometry (Mini_M1v1_platform.xml): box top at z=0.25, sized from the
+# jump_form_box_to_safety_roll_* mocap clips (mean starting pelvis height
+# 1.021 m vs. the robot's normal 0.77 m standing pelvis height).
+PLATFORM_HEIGHT: float = 0.25
+PLATFORM_SPAWN_POS: tuple[float, float, float] = (
+  0.0,
+  0.0,
+  PLATFORM_HEIGHT + KNEES_BENT_KEYFRAME.pos[2],
+)
 
-def get_mini_spec_with_head() -> mujoco.MjSpec:  # type: ignore[attr-defined]
-  """Mini_M1v1 spec with a massless ``head`` site on ``torso_link``."""
-  spec = _get_mini_spec()
+
+def get_mini_platform_spec() -> mujoco.MjSpec:  # type: ignore[attr-defined]
+  """Mini_M1v1 spec with the static jump-off platform and a ``head`` site.
+
+  Loads ``Mini_M1v1_platform.xml`` directly (rather than calling
+  ``mini_m11_constants.get_spec()``, which only loads the plain
+  ``Mini_M1v1.xml``) so the platform geometry is scoped to this task only —
+  other Mini_M1v1 tasks (getup_mini, steering_mini, ...) are unaffected.
+  """
+  platform_xml = _PLATFORM_XML
+  spec = mujoco.MjSpec.from_file(str(platform_xml))
   torso = spec.body("torso_link")
   if not any(s.name == "head" for s in torso.sites):
     torso.add_site(name="head", pos=HEAD_POS_IN_TORSO)
   return spec
 
 
-def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  """Build the Mini_M1v1 getup env cfg with SMP guidance."""
+def mini_jump_platform_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Build the Mini_M1v1 jump-platform env cfg with SMP guidance."""
   cfg = mini_smp_env_cfg(play=play)
 
   # --- Scene ---------------------------------------------------------------
-  # Replace the stock spec with one that has a ``head`` site for rewards.
-  cfg.scene.entities["robot"].spec_fn = get_mini_spec_with_head
+  # Replace the stock spec with one that adds the static box platform plus a
+  # ``head`` site for rewards.
+  robot_cfg = cfg.scene.entities["robot"]
+  robot_cfg.spec_fn = get_mini_platform_spec
+  # Spawn standing on top of the platform instead of on the bare floor.
+  cfg.scene.entities["robot"] = dataclasses.replace(
+    robot_cfg,
+    init_state=dataclasses.replace(KNEES_BENT_KEYFRAME, pos=PLATFORM_SPAWN_POS),
+  )
 
   # --- Events --------------------------------------------------------------
-  # pretrained_getup_f2s2.pt is feature_dim=59 (G1, 29 DOF) — incompatible with
-  # Mini (feature_dim=53, 23 DOF). Use the mini checkpoint until a dedicated
-  # Mini getup pretrain is available. Replace this path once you have trained:
-  #   uv run scripts/pretrain.py --data-dir dataset_mini/npz_getup ...
+  # SMP prior trained on the jump_form_box_to_safety_roll_* mocap clips
+  # (jumping off a box and recovering with a safety roll), so the sampled
+  # GSI poses span standing-on-box → mid-air → impact → roll → stand-up.
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "dataset_mini/chuong_data/roll_safety_pretrained.pt"
+    "dataset_mini/chuong_data/roll_platform_pretrained.pt"
   )
   cfg.events["reset_stand_counter"] = EventTermCfg(
     func=mdp.reset_stand_counter, mode="reset"
@@ -90,7 +127,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     func=task_smp_product,
     weight=1.0,
     params={
-      "smp_floor": 0.0,
+      "smp_floor": 0.3,
       "task_terms": (
         # Always-on: rotate the torso upright from ANY pose (core getup signal).
         (

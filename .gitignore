@@ -16,3 +16,4 @@ wandb/
 outputs/
 datasets/
 dataset_mini/csv
+dataset_mini/
