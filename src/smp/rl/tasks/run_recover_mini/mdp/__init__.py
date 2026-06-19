@@ -9,5 +9,6 @@ from smp.rl.tasks.steering.mdp.commands import (  # noqa: F401
 )
 from smp.rl.tasks.steering.mdp.rewards import steering_target_velocity  # noqa: F401
 
+from .events import *  # noqa: F401, F403
 from .rewards import *  # noqa: F401, F403
 from .terminations import *  # noqa: F401, F403

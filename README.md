@@ -92,8 +92,8 @@ uv run scripts/npz_to_csv.py dir --input-dir data_mini_npz/ --output-dir data_mi
 
 ```bash
 uv run scripts/csv_to_npz_mini.py \
-  --input-dir dataset_mini/csv \
-  --output-dir dataset_mini/npz
+  --input-dir dataset_mini/roll_and_run_csv \
+  --output-dir dataset_mini/roll_and_run_npz
 ```
 For each CSV this replays the motion through the G1 sim, forward-kinematics the
 tracked end-effectors, interpolates 30 → 50 fps, and slices the result into
