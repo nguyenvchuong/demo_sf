@@ -25,12 +25,40 @@
   </asset>
 
   <worldbody>
-    <!-- Box platform: top at z=0.25, centered under the robot's spawn point.
-         1.0 m x 1.0 m footprint — generous for the Mini's small (~0.3 m)
-         stance, with room to walk to an edge before jumping off. -->
-    <body name="platform" pos="0 0 0.125">
-      <geom name="platform_box" type="box" material="platform"
-        friction="1.0 0.01 0.001" size="0.5 0.5 0.125"/>
+    <!-- Symmetric staircase — IDENTICAL to scene_Mini_M1v1_stair_jump.xml.
+         Centered on y=0 and shifted so the top platform (highest tread, z=0.60)
+         is centered at the origin: the robot spawns standing on top of it.
+         Ascends in +x (3 steps × 0.15 m) from a platform edge at x=-0.75 up to
+         the platform center, then descends symmetrically to x=0.75. Each box is
+         filled from the floor up to its tread; all steps are 1.2 m wide (y).
+         The ground plane itself comes from the env's TerrainEntityCfg. -->
+    <!-- Geom names MUST end in `_collision` to match the robot's FULL_COLLISION
+         config (geom_names_expr=(".*_collision",)); otherwise mjlab leaves them
+         contype/conaffinity=0 (visual only) and the robot falls through. -->
+    <!-- quat = 90° yaw about z: the steps now run along y, so the robot (which
+         spawns facing +x, the direction the jump prior moves) faces the steep
+         0.60 m platform edge that drops to OPEN floor — matching the jump-off-
+         and-roll motion, instead of facing down the gentle descending steps. -->
+    <body name="stairs" pos="-0.35 0 0" quat="0.70710678 0 0 0.70710678">
+      <!-- ascent (near side): edge at x=-2.0 -->
+      <geom name="stair_up_1_collision" type="box" material="platform" friction="1.0 0.01 0.001"
+        pos="-2.00 0 0.075" size="0.25 0.6 0.075"/>  <!-- tread z=0.15, x[-2.25,-1.75] -->
+      <geom name="stair_up_2_collision" type="box" material="platform" friction="1.0 0.01 0.001"
+        pos="-1.50 0 0.150" size="0.25 0.6 0.150"/>  <!-- tread z=0.30, x[-1.75,-1.25] -->
+      <geom name="stair_up_3_collision" type="box" material="platform" friction="1.0 0.01 0.001"
+        pos="-1.00 0 0.225" size="0.25 0.6 0.225"/>  <!-- tread z=0.45, x[-1.25,-0.75] -->
+
+      <!-- top platform: tread z=0.60, 1.5 m deep, x[-0.75,0.75]; robot spawns here -->
+      <geom name="stair_top_collision" type="box" material="platform" friction="1.0 0.01 0.001"
+        pos="0.00 0 0.300" size="0.75 0.6 0.300"/>
+
+      <!-- descent (far side, mirror of the ascent about the platform center) -->
+      <geom name="stair_down_3_collision" type="box" material="platform" friction="1.0 0.01 0.001"
+        pos="1.00 0 0.225" size="0.25 0.6 0.225"/>  <!-- tread z=0.45, x[0.75,1.25] -->
+      <geom name="stair_down_2_collision" type="box" material="platform" friction="1.0 0.01 0.001"
+        pos="1.50 0 0.150" size="0.25 0.6 0.150"/>  <!-- tread z=0.30, x[1.25,1.75] -->
+      <geom name="stair_down_1_collision" type="box" material="platform" friction="1.0 0.01 0.001"
+        pos="2.00 0 0.075" size="0.25 0.6 0.075"/>  <!-- tread z=0.15, x[1.75,2.25] -->
     </body>
   </worldbody>
 </mujoco>

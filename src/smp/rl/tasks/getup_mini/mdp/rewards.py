@@ -21,7 +21,34 @@ __all__ = [
   "soft_landing",
   "roll_momentum",
   "proactive_roll",
+  "descend_off_platform",
 ]
+
+
+def descend_off_platform(
+  env: ManagerBasedRlEnv,
+  target_height: float = 0.80,
+  scale: float = 4.0,
+) -> torch.Tensor:
+  """Reward leaving a raised platform and getting the base down to FLOOR level.
+
+  ``base_z`` (pelvis world z, env-origin relative) ABOVE ``target_height`` (the
+  ~0.80 m floor-standing pelvis height) is penalised — so standing on a 0.60 m
+  platform (base ≈ 1.37 m) is NO LONGER free reward, which is what drives the
+  jump-off. At or below floor-standing it returns 1.0, so the descent, the low
+  roll, and the final floor stand are all un-penalised:
+  ``exp(-scale·max(base_z − target_height, 0)²)``.
+
+  The JUMP-OFF driver for the jump-platform task. Without it the always-on
+  ``track_head_height`` / ``upright_progress`` terms saturate to 1.0 on the
+  platform (head far above the 0.65 m target = overshoot), giving the robot no
+  reason to leave it. (Inert for the plain getup task, where base never exceeds
+  ~0.80 m, so it returns 1.0 throughout there.)
+  """
+  robot = env.scene["robot"]
+  base_z = robot.data.root_link_pos_w[:, 2] - env.scene.env_origins[:, 2]
+  over = torch.clamp(base_z - target_height, min=0.0)
+  return torch.exp(-scale * over * over)
 
 
 def upright_progress(

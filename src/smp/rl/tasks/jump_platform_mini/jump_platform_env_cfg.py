@@ -41,10 +41,10 @@ HEAD_STOOD_UP: float = 0.62             # stood_up: success threshold
 HEAD_FLOOR_THRESHOLD: float = 0.30      # soft_landing: below = impact/contact phase
 HEAD_ROLL_THRESHOLD: float = 0.42       # roll_momentum: below = active rolling phase
 
-# Platform geometry (Mini_M1v1_platform.xml): box top at z=0.25, sized from the
-# jump_form_box_to_safety_roll_* mocap clips (mean starting pelvis height
-# 1.021 m vs. the robot's normal 0.77 m standing pelvis height).
-PLATFORM_HEIGHT: float = 0.25
+# Platform geometry (Mini_M1v1_platform.xml): now the symmetric staircase from
+# scene_Mini_M1v1_stair_jump.xml — the TOP tread (where the robot spawns) is at
+# z=0.60, 1.5 m deep × 1.2 m wide, with 3 descending 0.15 m steps on each side.
+PLATFORM_HEIGHT: float = 0.60
 PLATFORM_SPAWN_POS: tuple[float, float, float] = (
   0.0,
   0.0,
@@ -83,6 +83,12 @@ def mini_jump_platform_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     init_state=dataclasses.replace(KNEES_BENT_KEYFRAME, pos=PLATFORM_SPAWN_POS),
   )
 
+  # The collidable staircase generates many more simultaneous contacts than the
+  # old single box (the robot can touch several steps + the platform at once,
+  # especially mid-roll). The shared cfg's nconmax=35 overflows ("nconmax must
+  # be >= 36"); raise the contact buffer to accommodate the stair geometry.
+  cfg.sim.nconmax = 256
+
   # --- Events --------------------------------------------------------------
   # SMP prior trained on the jump_form_box_to_safety_roll_* mocap clips
   # (jumping off a box and recovering with a safety roll), so the sampled
@@ -90,6 +96,12 @@ def mini_jump_platform_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.events["init_smp_state"].params["ckpt_path"] = (
     "dataset_mini/chuong_data/roll_platform_pretrained.pt"
   )
+  # No z-offset: the task is "jump FROM the 0.60 m platform DOWN to the floor and
+  # roll", so the prior's floor (z=0) must map to the real floor (z=0) and its
+  # platform (~0.59 m) to the real 0.60 m platform — i.e. the heights already
+  # match, no shift. (A 0.60 offset would replay the whole jump+roll ON TOP of the
+  # platform, so the robot would never reach the floor.)
+  cfg.events["init_smp_state"].params["smp_z_offset"] = 0.0
   cfg.events["reset_stand_counter"] = EventTermCfg(
     func=mdp.reset_stand_counter, mode="reset"
   )
@@ -101,87 +113,68 @@ def mini_jump_platform_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # blow-ups. Revisit (modestly) only once training is confirmed stable.
 
   # --- Rewards -------------------------------------------------------------
-  # Ukemi + quick-standup reward (all terms ∈ [0,1], weights sum to 1).
+  # Jump-off-platform → safety-roll-on-floor → stand (all terms ∈ [0,1], weights
+  # sum to 1), SMP-gated (gate = smp_floor + (1−smp_floor)·r_smp). The roll_platform
+  # prior carries the jump+roll STYLE; the task terms supply the phase incentives.
   #
-  # The reward is SMP-gated with a FLOOR (``smp_floor``): the gate is
-  #   gate = smp_floor + (1 - smp_floor) · r_smp ∈ [smp_floor, 1].
-  # A pure ×r_smp gate collapses to ~0 in fallen/off-manifold poses (the single
-  # rolling clip's manifold is a thin tube dominated by standing), which leaves
-  # the policy with NO gradient out of the exact states a getup task must escape.
-  # The floor keeps ``smp_floor · task`` flowing off-manifold while on-manifold
-  # rolling still earns the full ×1 style bonus.
+  # Behaviour arc (base = pelvis world-z; platform top 0.60 m, floor 0):
+  #   1. ON PLATFORM  (base ≈ 1.37): descend_off_platform penalises staying up
+  #      → the robot must JUMP OFF the edge toward the floor.
+  #   2. FALL         (base 1.37 → 0): the prior + proactive_roll set up the tuck.
+  #   3. LAND + ROLL  (head/base low): soft_landing rewards a low-impact landing,
+  #      roll_momentum rewards the rolling angular velocity (ukemi).
+  #   4. RECOVER      (on floor): track_head_height (→0.65) + upright_progress
+  #      bring it to a stable floor stand.
   #
-  # Term roles:
-  #   upright_progress  — ALWAYS-ON monotonic potential (torso orientation).
-  #                       This is the spine of the lying→standing gradient and
-  #                       is never gated to a single phase, so the policy always
-  #                       has a signal pulling it upright off the floor.
-  #   track_head_height — ALWAYS-ON: stand tall.
-  #   upward_velocity   — phase (head < HEAD_UP_THRESHOLD): rise QUICKLY.
-  #   roll_momentum     — phase (head < HEAD_ROLL_THRESHOLD): roll to spread impact.
-  #   soft_landing      — phase (head < HEAD_FLOOR_THRESHOLD): absorb the fall.
-  #
-  # Phase terms return 1.0 outside their window → no cross-phase interference;
-  # the two always-on terms carry the global getup gradient.
+  # Reward ordering by outcome: floor-stand (≈1.0) > stay-on-platform (≈0.87,
+  # capped by descend_off_platform) > hard flop — so leaving the platform and
+  # rolling to a clean stand is the global optimum.
   cfg.rewards["task_smp_product"] = RewardTermCfg(
     func=task_smp_product,
     weight=1.0,
     params={
-      "smp_floor": 0.3,
+      "smp_floor": 0.0,
       "task_terms": (
-        # Always-on: rotate the torso upright from ANY pose (core getup signal).
+        # JUMP-OFF driver: penalise remaining at platform height; 1.0 once the
+        # base is at/below floor-standing height.
         (
-          mdp.upright_progress,
+          mdp.descend_off_platform,
           0.25,
-          {"scale": 1.0},
+          {"target_height": 0.80, "scale": 4.0},
         ),
-        # Always-on: drive the head toward standing height.
+        # LANDING: absorb impact with a soft (rolling) landing, not a hard slam.
         (
-          mdp.track_head_height,
+          mdp.soft_landing,
           0.20,
-          {"target_height": HEAD_TARGET_HEIGHT, "scale": 1.0},
+          {"scale": 4.0, "head_floor_threshold": HEAD_FLOOR_THRESHOLD},
         ),
-        # Rising phase: drive head upward quickly until near-standing height.
-        (
-          mdp.upward_velocity,
-          0.15,
-          {
-            "target_velocity": 0.40,
-            "head_height_threshold": HEAD_UP_THRESHOLD,
-            "scale": 100.0,
-          },
-        ),
-        # PROACTIVE roll: once the torso tilts past recovery (CoM outside the
-        # support polygon), reward rolling angular momentum — triggered by TILT
-        # while still up high, so the robot commits to a roll instead of a rigid
-        # flat fall. This is the term that makes it roll when pushed over.
-        (
-          mdp.proactive_roll,
-          0.20,
-          {
-            "tilt_threshold": 0.6,
-            "target_ang_vel": 2.0,
-            "scale": 0.5,
-          },
-        ),
-        # On-ground rolling: keep rotating once already low (head < threshold).
+        # ROLL: reward horizontal angular velocity once low — the safety roll.
         (
           mdp.roll_momentum,
-          0.10,
+          0.20,
           {
             "target_ang_vel": 1.5,
             "scale": 1.0,
             "head_roll_threshold": HEAD_ROLL_THRESHOLD,
           },
         ),
-        # Impact phase: reward soft (rolling) landing — penalise hard fall speed.
+        # Initiate the roll mid-fall once the torso tilts past upright.
         (
-          mdp.soft_landing,
+          mdp.proactive_roll,
           0.10,
-          {
-            "scale": 4.0,
-            "head_floor_threshold": HEAD_FLOOR_THRESHOLD,
-          },
+          {"tilt_threshold": 0.6, "target_ang_vel": 2.0, "scale": 0.5},
+        ),
+        # RECOVER: stand tall on the floor after the roll.
+        (
+          mdp.track_head_height,
+          0.15,
+          {"target_height": HEAD_TARGET_HEIGHT, "scale": 1.0},
+        ),
+        # RECOVER: torso upright for the final floor stand.
+        (
+          mdp.upright_progress,
+          0.10,
+          {"scale": 1.0},
         ),
       ),
     },

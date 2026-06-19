@@ -48,13 +48,21 @@ def init_smp_state(
   gsi_batch_size: int = 256,
   compile_model: bool = True,
   compile_mode: str | None = None,
+  smp_z_offset: float = 0.0,
 ) -> None:
   """Startup-mode event: load the frozen denoiser, allocate the feature buffer +
   ``DiffNormalizer`` (stashed on the env), and pre-generate the GSI pool of
   ``gsi_buffer_size`` windows that ``gsi_reset`` samples from (amortizes the DDPM
   cost).  If ``compile_model``, the denoiser is ``torch.compile``-d and pre-warmed
-  so Inductor compiles here, not on the first sim step."""
+  so Inductor compiles here, not on the first sim step.
+
+  ``smp_z_offset`` raises the GSI-placed robot by this many metres in the SIM
+  while keeping the SMP feature world floor at 0 (the reward subtracts it back
+  out). Use it when the robot stands on a raised surface (e.g. a platform of
+  height ``smp_z_offset``): the whole prior motion then plays out ON TOP of that
+  surface instead of inside it, without the prior seeing an off-manifold z."""
   del env_ids
+  env._smp_z_offset = float(smp_z_offset)  # type: ignore[attr-defined]
   if not ckpt_path:
     msg = (
       "init_smp_state called without `ckpt_path`. Set it on the EventTermCfg: "
@@ -160,11 +168,18 @@ def _prime_sim_and_buffer(
   ee_offset_w = quat_apply(yaw_T_E, ee_pos_local.reshape(-1, 3)).reshape(n, W, E, 3)
   ee_pos_w = ee_offset_w + pelvis_pos_w[:, :, None, :]
 
-  # Buffer stays env-relative; the sim write is offset to each env's origin.
+  # Buffer stays env-relative (SMP world, floor=0); the sim write is offset to
+  # each env's origin and raised by smp_z_offset so the robot is placed ON a
+  # raised surface of that height (the reward subtracts the offset back out).
   origins = env.scene.env_origins[env_ids]
+  z_off = getattr(env, "_smp_z_offset", 0.0)
+  sim_root_pos = pelvis_pos_w[:, -1] + origins
+  if z_off:
+    sim_root_pos = sim_root_pos.clone()
+    sim_root_pos[:, 2] += z_off
   last_root_state = torch.cat(
     [
-      pelvis_pos_w[:, -1] + origins,
+      sim_root_pos,
       pelvis_quat_w[:, -1],
       lin_vel_w[:, -1],
       ang_vel_w[:, -1],
