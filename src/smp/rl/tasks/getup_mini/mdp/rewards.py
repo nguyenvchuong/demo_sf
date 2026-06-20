@@ -22,6 +22,7 @@ __all__ = [
   "roll_momentum",
   "proactive_roll",
   "descend_off_platform",
+  "rolling_contact_force",
 ]
 
 
@@ -187,4 +188,36 @@ def roll_momentum(
   ang_mag = torch.norm(ang_xy, dim=-1)
   shortfall = torch.clamp(ang_mag - target_ang_vel, max=0.0)
   shaped = torch.exp(-scale * shortfall * shortfall)
+  return torch.where(head_z < head_roll_threshold, shaped, torch.ones_like(shaped))
+
+
+def rolling_contact_force(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  max_force: float = 150.0,
+  scale: float = 1.0,
+  head_roll_threshold: float = 0.42,
+) -> torch.Tensor:
+  """Reward LOW peak ground-contact force while actively rolling (head < threshold).
+
+  A good roll spreads impact across the body and over time rather than
+  slamming a single link into the floor — this penalises exactly that spike.
+  Takes the per-body contact-force magnitude from ``sensor_name`` (a
+  robot-vs-terrain ``ContactSensorCfg``), reduces to the single worst contact
+  this step, and rewards staying under ``max_force`` (newtons):
+  ``exp(-scale·max((peak_force − max_force) / max_force, 0)²)``.  Returns 1.0
+  above the head-height threshold so it does not interfere with the standup
+  phase (and is inert outside the rolling window, e.g. for ``soft_landing``'s
+  impact phase, which gates separately on fall *speed* rather than force).
+  """
+  robot = env.scene["robot"]
+  head_idx = robot.find_sites(["head"], preserve_order=True)[0][0]
+  head_z = robot.data.site_pos_w[:, head_idx, 2]
+
+  contact_sensor = env.scene.sensors[sensor_name]
+  force_norm = torch.norm(contact_sensor.data.force, dim=-1)  # [B, N]
+  peak_force = torch.max(force_norm, dim=-1)[0]  # [B]
+
+  excess = torch.clamp((peak_force - max_force) / max_force, min=0.0)
+  shaped = torch.exp(-scale * excess * excess)
   return torch.where(head_z < head_roll_threshold, shaped, torch.ones_like(shaped))

@@ -7,6 +7,7 @@ from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg
 
 from smp.rl.env_cfg import mini_smp_env_cfg
 from smp.rl.rewards import task_smp_product
@@ -20,12 +21,20 @@ from smp.robot.Mini_M1v1.mini_m11_constants import get_spec as _get_mini_spec
 HEAD_POS_IN_TORSO: tuple[float, float, float] = (0.0, 0.0, 0.31)
 
 # Reward / termination heights scaled to Mini's ~0.68 m standing head height.
-HEAD_TARGET_HEIGHT: float = 0.65        # track_head_height goal (just below full stand)
-HEAD_UP_THRESHOLD: float = 0.50         # upward_velocity: drive while head below this
-HEAD_STOOD_UP: float = 0.62             # stood_up: success threshold
+HEAD_TARGET_HEIGHT: float = 0.65  # track_head_height goal (just below full stand)
+HEAD_UP_THRESHOLD: float = 0.50  # upward_velocity: drive while head below this
+HEAD_STOOD_UP: float = 0.62  # stood_up: success threshold
 # Ukemi-specific thresholds.
-HEAD_FLOOR_THRESHOLD: float = 0.30      # soft_landing: below = impact/contact phase
-HEAD_ROLL_THRESHOLD: float = 0.42       # roll_momentum: below = active rolling phase
+HEAD_FLOOR_THRESHOLD: float = 0.30  # soft_landing: below = impact/contact phase
+HEAD_ROLL_THRESHOLD: float = 0.42  # roll_momentum: below = active rolling phase
+
+GROUND_CONTACT_FORCE_SENSOR = ContactSensorCfg(
+  name="ground_contact_force",
+  primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
+  secondary=ContactMatch(mode="body", pattern="terrain"),
+  fields=("found", "force"),
+  reduce="maxforce",
+)
 
 
 def get_mini_spec_with_head() -> mujoco.MjSpec:  # type: ignore[attr-defined]
@@ -44,6 +53,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # --- Scene ---------------------------------------------------------------
   # Replace the stock spec with one that has a ``head`` site for rewards.
   cfg.scene.entities["robot"].spec_fn = get_mini_spec_with_head
+  cfg.scene.sensors = (*cfg.scene.sensors, GROUND_CONTACT_FORCE_SENSOR)
 
   # --- Events --------------------------------------------------------------
   # pretrained_getup_f2s2.pt is feature_dim=59 (G1, 29 DOF) — incompatible with
@@ -51,7 +61,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # Mini getup pretrain is available. Replace this path once you have trained:
   #   uv run scripts/pretrain.py --data-dir dataset_mini/npz_getup ...
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "dataset_mini/chuong_data/roll_safety_pretrained.pt"
+    "dataset_mini/cmu/cmu_pretrained.pt"
   )
   cfg.events["reset_stand_counter"] = EventTermCfg(
     func=mdp.reset_stand_counter, mode="reset"
@@ -130,7 +140,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # On-ground rolling: keep rotating once already low (head < threshold).
         (
           mdp.roll_momentum,
-          0.10,
+          0.05,
           {
             "target_ang_vel": 1.5,
             "scale": 1.0,
@@ -140,10 +150,22 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # Impact phase: reward soft (rolling) landing — penalise hard fall speed.
         (
           mdp.soft_landing,
-          0.10,
+          0.05,
           {
             "scale": 4.0,
             "head_floor_threshold": HEAD_FLOOR_THRESHOLD,
+          },
+        ),
+        # Rolling phase: penalise high peak ground-contact force, so rolling
+        # spreads impact across the body/time instead of slamming one link.
+        (
+          mdp.rolling_contact_force,
+          0.10,
+          {
+            "sensor_name": GROUND_CONTACT_FORCE_SENSOR.name,
+            "max_force": 150.0,
+            "scale": 1.0,
+            "head_roll_threshold": HEAD_ROLL_THRESHOLD,
           },
         ),
       ),
