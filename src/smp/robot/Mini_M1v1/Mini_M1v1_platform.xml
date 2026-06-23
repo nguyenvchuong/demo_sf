@@ -39,7 +39,7 @@
          spawns facing +x, the direction the jump prior moves) faces the steep
          0.60 m platform edge that drops to OPEN floor — matching the jump-off-
          and-roll motion, instead of facing down the gentle descending steps. -->
-    <body name="stairs" pos="-0.35 0 0" quat="0.70710678 0 0 0.70710678">
+    <body name="stairs" pos="-0.45 0 0" quat="0.70710678 0 0 0.70710678">
       <!-- ascent (near side): edge at x=-2.0 -->
       <geom name="stair_up_1_collision" type="box" material="platform" friction="1.0 0.01 0.001"
         pos="-2.00 0 0.075" size="0.25 0.6 0.075"/>  <!-- tread z=0.15, x[-2.25,-1.75] -->
