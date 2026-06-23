@@ -27,7 +27,6 @@ HEAD_STOOD_UP: float = 0.62  # stood_up: success threshold
 # Ukemi-specific thresholds.
 HEAD_FLOOR_THRESHOLD: float = 0.30  # soft_landing: below = impact/contact phase
 HEAD_ROLL_THRESHOLD: float = 0.42  # roll_momentum: below = active rolling phase
-HEAD_STABILIZE_THRESHOLD: float = 0.55  # stabilize_after_standup: above = final settle
 
 GROUND_CONTACT_FORCE_SENSOR = ContactSensorCfg(
   name="ground_contact_force",
@@ -62,7 +61,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # Mini getup pretrain is available. Replace this path once you have trained:
   #   uv run scripts/pretrain.py --data-dir dataset_mini/npz_getup ...
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "dataset_mini/cmu/cmu_pretrained.pt"
+    "dataset_mini/cmu/new/pretrained.pt"
   )
   cfg.events["reset_stand_counter"] = EventTermCfg(
     func=mdp.reset_stand_counter, mode="reset"
@@ -125,26 +124,17 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             "scale": 100.0,
           },
         ),
-        # PROACTIVE roll: once the torso tilts toward the edge of recovery (CoM
-        # nearing the limit of the support polygon), reward rolling angular
-        # momentum — triggered by TILT while still up high, so the robot
-        # commits to a roll instead of a rigid flat fall. This is the term
-        # that makes it roll when pushed over.
-        #
-        # tilt_threshold is intentionally modest (~20° of lean, was 0.6/~37°)
-        # and the internal gate is a smooth sigmoid rather than a hard cutoff
-        # (see proactive_roll docstring) — together these widen the activation
-        # band down to SMALL forward pushes, which previously never built up
-        # enough tilt to cross 0.6 and so got no proactive-roll incentive at
-        # all, leaving them to fall stiffly instead of tucking into a roll.
+        # PROACTIVE roll: once the torso tilts past recovery (CoM outside the
+        # support polygon), reward rolling angular momentum — triggered by TILT
+        # while still up high, so the robot commits to a roll instead of a rigid
+        # flat fall. This is the term that makes it roll when pushed over.
         (
           mdp.proactive_roll,
           0.20,
           {
-            "tilt_threshold": 0.35,
+            "tilt_threshold": 0.15,
             "target_ang_vel": 2.0,
             "scale": 0.5,
-            "gate_sharpness": 12.0,
           },
         ),
         # On-ground rolling: keep rotating once already low (head < threshold).
@@ -170,24 +160,12 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # spreads impact across the body/time instead of slamming one link.
         (
           mdp.rolling_contact_force,
-          0.05,
+          0.10,
           {
             "sensor_name": GROUND_CONTACT_FORCE_SENSOR.name,
             "max_force": 150.0,
             "scale": 1.0,
             "head_roll_threshold": HEAD_ROLL_THRESHOLD,
-          },
-        ),
-        # Final-settle phase: once nearly standing, penalise residual
-        # horizontal base velocity so the roll-up momentum gets bled off
-        # instead of carrying the robot forward into a walk/drift after it
-        # stands. Inert during rolling/rising, where that momentum is wanted.
-        (
-          mdp.stabilize_after_standup,
-          0.05,
-          {
-            "head_height_threshold": HEAD_STABILIZE_THRESHOLD,
-            "scale": 4.0,
           },
         ),
       ),

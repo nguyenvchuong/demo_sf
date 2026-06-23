@@ -23,7 +23,6 @@ __all__ = [
   "proactive_roll",
   "descend_off_platform",
   "rolling_contact_force",
-  "stabilize_after_standup",
 ]
 
 
@@ -137,36 +136,26 @@ def soft_landing(
 
 def proactive_roll(
   env: ManagerBasedRlEnv,
-  tilt_threshold: float = 0.35,
+  tilt_threshold: float = 0.6,
   target_ang_vel: float = 2.0,
   scale: float = 0.5,
-  gate_sharpness: float = 12.0,
 ) -> torch.Tensor:
-  """Reward converting a topple into a roll — triggered by TILT, not height.
+  """Reward converting a COMMITTED topple into a roll — triggered by TILT, not height.
 
   Tilt = ``‖projected_gravity_b[:, :2]‖`` = sin(lean angle): 0 when upright, 1
-  when the torso is horizontal.  Once tilt approaches ``tilt_threshold`` the CoM
-  is nearing the edge of the foot support polygon and the lean can no longer be
-  cheaply arrested by balancing — resisting it rigidly produces a hard flat
-  impact.  Around that point this term rewards horizontal angular-velocity
-  magnitude ``|ω_xy|`` reaching ``target_ang_vel``, i.e. *going with* the
-  rotation and tucking into a roll rather than fighting it.
-
-  ``tilt_threshold`` is deliberately modest (≈20° of lean) so a small forward
-  push — which may never build up to a full topple — still falls inside the
-  gate's activation band and earns a proactive-roll incentive, not just a
-  violent shove.  The gate itself is a SMOOTH sigmoid in ``tilt`` (sharpness
-  ``gate_sharpness``) rather than a hard cutoff: this gives a continuous
-  gradient that starts pulling the policy toward rolling as the lean angle
-  rises, instead of nothing-then-everything at one cliff edge — exactly the
-  "weak disturbance never resists then suddenly must roll" gap that left small
-  pushes producing stiff, awkward falls.
+  when the torso is horizontal.  Once tilt exceeds ``tilt_threshold`` the CoM has
+  left the foot support polygon and the fall can no longer be arrested by
+  balancing — resisting it rigidly produces a hard flat impact.  At that point
+  this term rewards horizontal angular-velocity magnitude ``|ω_xy|`` reaching
+  ``target_ang_vel``, i.e. *going with* the rotation and tucking into a roll
+  rather than fighting it.
 
   Unlike ``roll_momentum`` (gated on head height, so it only fires once already
   low) this is gated on tilt, so it fires while the robot is still up high — the
   PROACTIVE trigger.  A rigid robot that resists the fall has low ``|ω_xy|`` and
   is penalised; a robot that rolls has high ``|ω_xy|`` and scores ~1.  Returns
-  ≈1.0 well below the threshold so balanced standing is never disturbed.
+  1.0 below the threshold so balanced standing is never disturbed.  The tilt
+  gate means the term cannot be farmed by spinning while still upright.
   """
   robot = env.scene["robot"]
   tilt = torch.norm(robot.data.projected_gravity_b[:, :2], dim=-1)
@@ -174,8 +163,7 @@ def proactive_roll(
   ang_mag = torch.norm(ang_xy, dim=-1)
   shortfall = torch.clamp(ang_mag - target_ang_vel, max=0.0)
   shaped = torch.exp(-scale * shortfall * shortfall)
-  gate = torch.sigmoid(gate_sharpness * (tilt - tilt_threshold))
-  return gate * shaped + (1.0 - gate) * torch.ones_like(shaped)
+  return torch.where(tilt > tilt_threshold, shaped, torch.ones_like(shaped))
 
 
 def roll_momentum(
@@ -201,32 +189,6 @@ def roll_momentum(
   shortfall = torch.clamp(ang_mag - target_ang_vel, max=0.0)
   shaped = torch.exp(-scale * shortfall * shortfall)
   return torch.where(head_z < head_roll_threshold, shaped, torch.ones_like(shaped))
-
-
-def stabilize_after_standup(
-  env: ManagerBasedRlEnv,
-  head_height_threshold: float = 0.55,
-  scale: float = 4.0,
-) -> torch.Tensor:
-  """Penalise residual horizontal base velocity once nearly standing.
-
-  Rolling and the final rise carry real momentum that the ``upward_velocity``
-  / ``roll_momentum`` terms reward — but if nothing ever asks for it to be
-  bled off, that horizontal momentum survives into the stand and the robot
-  drifts/walks forward off the spot it landed on instead of settling in
-  place. Once the head clears ``head_height_threshold`` (just below the
-  ``stood_up`` success height) this rewards a STILL base:
-  ``exp(-scale·‖v_xy‖²)``.  Returns 1.0 below the threshold so it never
-  fights the rolling or rising phases, where horizontal velocity is expected
-  and useful — it only kicks in for the final settle.
-  """
-  robot = env.scene["robot"]
-  head_idx = robot.find_sites(["head"], preserve_order=True)[0][0]
-  head_z = robot.data.site_pos_w[:, head_idx, 2]
-  vel_xy = robot.data.root_link_lin_vel_w[:, :2]
-  speed_sq = torch.sum(vel_xy * vel_xy, dim=-1)
-  shaped = torch.exp(-scale * speed_sq)
-  return torch.where(head_z > head_height_threshold, shaped, torch.ones_like(shaped))
 
 
 def rolling_contact_force(
