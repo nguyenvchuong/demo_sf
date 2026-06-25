@@ -30,6 +30,9 @@ class MotionWindowDataset(Dataset[torch.Tensor]):
     expected_shape: tuple[int, int] | None = None
     for npz_file in npz_files:
       with np.load(npz_file, allow_pickle=False) as npz:
+        if "windows" not in npz.files:
+          # e.g. a norm_stats.npz sitting alongside the windowed data files.
+          continue
         windows = npz["windows"].astype(np.float32, copy=False)
       if windows.ndim != 3:
         msg = (
@@ -46,7 +49,9 @@ class MotionWindowDataset(Dataset[torch.Tensor]):
         raise ValueError(msg)
       chunks.append(windows)
 
-    assert expected_shape is not None
+    if expected_shape is None:
+      msg = f"No NPZ files with a 'windows' array found in {data_dir}"
+      raise FileNotFoundError(msg)
     self.window_size, self.feature_dim = expected_shape
 
     data = np.concatenate(chunks, axis=0)

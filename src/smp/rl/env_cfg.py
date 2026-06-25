@@ -28,6 +28,7 @@ from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.scene import SceneCfg
+from mjlab.sensor import BuiltinSensor
 from mjlab.sensor.contact_sensor import ContactMatch, ContactSensorCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.tasks.velocity.mdp import illegal_contact
@@ -118,6 +119,19 @@ def make_smp_sim() -> SimulationCfg:
   )
 
 
+def projected_gravity_imu(env, sensor_name: str = "robot/imu_lin_acc"):
+  """Estimate projected gravity from an IMU accelerometer sensor.
+
+  Computes ``-accelerometer_reading / 9.81``, matching the deployed FSM's
+  MQEKF-derived ``-aBody / 9.81`` (see vm_ctrl FSMState_*.cpp) so the policy
+  trains on the same gravity-direction signal it sees at runtime, instead of
+  the ground-truth quaternion-rotated gravity vector.
+  """
+  sensor = env.scene[sensor_name]
+  assert isinstance(sensor, BuiltinSensor)
+  return -sensor.data / 9.81
+
+
 def make_g1_smp_observations() -> dict[str, ObservationGroupCfg]:
   """G1 + SMP observation configuration."""
   actor_terms = {
@@ -176,8 +190,15 @@ def make_mini_smp_observations() -> dict[str, ObservationGroupCfg]:
       params={"sensor_name": "robot/imu_ang_vel"},
       noise=Unoise(n_min=-0.2, n_max=0.2),
     ),
+    # "projected_gravity": ObservationTermCfg(
+    #   func=mdp.projected_gravity,
+    #   noise=Unoise(n_min=-0.05, n_max=0.05),
+    # ),
+    # Accelerometer-derived projected gravity (-aBody/9.81), matching the
+    # deployed FSM's MQEKF estimate instead of ground-truth quat rotation.
     "projected_gravity": ObservationTermCfg(
-      func=mdp.projected_gravity,
+      func=projected_gravity_imu,
+      params={"sensor_name": "robot/imu_lin_acc"},
       noise=Unoise(n_min=-0.05, n_max=0.05),
     ),
     "joint_pos": ObservationTermCfg(
@@ -338,6 +359,31 @@ def make_mini_smp_events() -> dict[str, EventTermCfg]:
         },
       },
     ),
+    # Sustained external pushes with randomized strength AND duration. Force
+    # magnitude and impulse length are sampled INDEPENDENTLY per impulse, so a
+    # single event continuously spans every regime the getup/rolling policy must
+    # be robust to: strong+short (sharp shove), strong+long (sustained hard push
+    # that tips the robot over → roll → get up), weak+short (minor balance
+    # nudge), weak+long (slow lean/drift). The robot is not free-floating — feet
+    # are planted and actuators + ground friction resist — so it genuinely
+    # fights each push and only loses balance on the harder samples.
+    #
+    # body_point_offset lifts the application point 25 cm above the torso CoM:
+    # cross(offset, force) adds a tipping torque so horizontal pushes ROLL the
+    # robot rather than just sliding it, which is the disturbance getup must
+    # recover from. Mini total mass ~35 kg (torso ~10 kg).
+    "push_impulse": EventTermCfg(
+      func=mdp.apply_body_impulse,
+      mode="step",
+      params={
+        "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
+        "force_range": (-200.0, 200.0),   # N/component: ~0 (weak) → 200 (strong)
+        "torque_range": (-20.0, 20.0),    # Nm: extra spin to provoke rolling
+        "duration_s": (0.05, 1.0),        # short snap → long sustained lean
+        "cooldown_s": (1.5, 4.0),         # recovery gap (getup needs settle time)
+        "body_point_offset": (0.0, 0.0, 0.25),
+      },
+    ),
     "foot_friction": EventTermCfg(
       mode="startup",
       func=dr.geom_friction,
@@ -459,6 +505,7 @@ def _apply_play_overrides(cfg: ManagerBasedRlEnvCfg) -> None:
   """Strip training-only events and shrink the SMP buffer for play mode."""
   cfg.episode_length_s = int(1e9)
   cfg.events.pop("push_robot", None)
+  cfg.events.pop("push_impulse", None)
   cfg.events.pop("gsi_refresh", None)
   cfg.events["init_smp_state"].params["compile_model"] = False
   cfg.events["init_smp_state"].params["gsi_buffer_size"] = 1024
