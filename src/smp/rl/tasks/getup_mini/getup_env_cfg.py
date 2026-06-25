@@ -5,6 +5,7 @@ from __future__ import annotations
 import mujoco
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.managers.event_manager import EventTermCfg
+from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
@@ -205,6 +206,22 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     time_out=True,
     params={"head_height": HEAD_STOOD_UP, "max_speed": 0.5, "hold_steps": 25},
   )
+
+  # --- Metrics (live plots in Viser + episode logs during training) ----------
+  _force_sensor = GROUND_CONTACT_FORCE_SENSOR.name
+  cfg.metrics = {
+    "peak_contact_force_N": MetricsTermCfg(
+      func=mdp.peak_ground_contact_force,
+      params={"sensor_name": _force_sensor},
+    ),
+    "ground_contacting_bodies": MetricsTermCfg(
+      func=mdp.ground_contacting_bodies,
+      params={"sensor_name": _force_sensor},
+    ),
+    "head_height_m": MetricsTermCfg(func=mdp.head_height),
+    "pelvis_downward_speed_mps": MetricsTermCfg(func=mdp.pelvis_downward_speed),
+    **mdp.make_per_link_peak_force_metrics(_force_sensor),
+  }
 
   cfg.episode_length_s = 5
 

@@ -22,11 +22,12 @@ import tyro
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
-from mjlab.scripts.play import main
+import mjlab.scripts.play as mjlab_play
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.utils.torch import configure_torch_backends
 
 import smp.rl.tasks  # noqa: F401  # registers Smp-* tasks in the mjlab registry
+from smp.rl.viewer import SmpViserPlayViewer
 
 
 @dataclass(frozen=True)
@@ -84,4 +85,6 @@ if __name__ == "__main__":
     sys.argv.remove("--to-onnx")
     export_onnx(tyro.cli(OnnxExportConfig, config=mjlab.TYRO_FLAGS))
   else:
-    main()
+    # Use native MuJoCo contact-force decor in Viser (not simple debug arrows).
+    mjlab_play.ViserPlayViewer = SmpViserPlayViewer
+    mjlab_play.main()
