@@ -133,7 +133,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
           mdp.proactive_roll,
           0.20,
           {
-            "tilt_threshold": 0.05,
+            "tilt_threshold": 0.01,
             "target_ang_vel": 2.0,
             "scale": 0.5,
           },
