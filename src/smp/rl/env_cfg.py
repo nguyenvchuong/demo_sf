@@ -17,6 +17,10 @@ from smp.robot.Mini_M1v1 import (
   get_mini_m1v1_robot_cfg,
   MINI_M1V1_ACTION_SCALE
 )
+from smp.robot.Mini_M1v3 import (
+  get_mini_m1v3_robot_cfg,
+  MINI_M1V3_ACTION_SCALE
+)
 from mjlab.envs import ManagerBasedRlEnvCfg, mdp
 from mjlab.envs.mdp import dr, time_out
 from mjlab.envs.mdp.actions import JointPositionActionCfg
@@ -91,6 +95,19 @@ class MiniSmpSceneCfg(SceneCfg):
     default_factory=lambda: TerrainEntityCfg(terrain_type="plane")
   )
   entities: dict = field(default_factory=lambda: {"robot": get_mini_m1v1_robot_cfg()})
+  sensors: tuple = field(default_factory=lambda: (MINI_SELF_COLLISION,))
+
+
+@dataclass(kw_only=True)
+class MiniV3SmpSceneCfg(SceneCfg):
+  """Scene configuration for the Mini_M1v3 + SMP guidance environment."""
+
+  num_envs: int = 1
+  extent: float = 2.0
+  terrain: TerrainEntityCfg | None = field(
+    default_factory=lambda: TerrainEntityCfg(terrain_type="plane")
+  )
+  entities: dict = field(default_factory=lambda: {"robot": get_mini_m1v3_robot_cfg()})
   sensors: tuple = field(default_factory=lambda: (MINI_SELF_COLLISION,))
 
 
@@ -248,6 +265,18 @@ def make_mini_smp_actions() -> dict[str, ActionTermCfg]:
       entity_name="robot",
       actuator_names=(".*",),
       scale=MINI_M1V1_ACTION_SCALE,
+      use_default_offset=True,
+    )
+  }
+
+
+def make_mini_v3_smp_actions() -> dict[str, ActionTermCfg]:
+  """Mini_M1v3 + SMP action specification."""
+  return {
+    "joint_pos": JointPositionActionCfg(
+      entity_name="robot",
+      actuator_names=(".*",),
+      scale=MINI_M1V3_ACTION_SCALE,
       use_default_offset=True,
     )
   }
@@ -501,6 +530,30 @@ class MiniSmpEnvCfg(ManagerBasedRlEnvCfg):
   episode_length_s: float = 20.0
 
 
+@dataclass(kw_only=True)
+class MiniV3SmpEnvCfg(ManagerBasedRlEnvCfg):
+  """Configuration for the Mini_M1v3 + SMP guidance environment.
+
+  Observations/events/terminations are shared with Mini_M1v1 (no robot-specific
+  coupling beyond the generic ``"robot"``/``"torso_link"`` names, which both
+  robots share) — only the scene entity and action scale differ per robot.
+
+  Rewards are intentionally left empty: each task adds its own
+  ``task_smp_product`` term (task reward x SMP guidance).
+  """
+
+  scene: MiniV3SmpSceneCfg = field(default_factory=MiniV3SmpSceneCfg)
+  observations: dict = field(default_factory=make_mini_smp_observations)
+  actions: dict = field(default_factory=make_mini_v3_smp_actions)
+  events: dict = field(default_factory=make_mini_smp_events)
+  rewards: dict = field(default_factory=dict)
+  terminations: dict = field(default_factory=make_mini_smp_terminations)
+  viewer: ViewerConfig = field(default_factory=make_smp_viewer)
+  sim: SimulationCfg = field(default_factory=make_smp_sim)
+  decimation: int = 4
+  episode_length_s: float = 20.0
+
+
 def _apply_play_overrides(cfg: ManagerBasedRlEnvCfg) -> None:
   """Strip training-only events and shrink the SMP buffer for play mode."""
   cfg.episode_length_s = int(1e9)
@@ -524,6 +577,15 @@ def mini_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """Build the shared Mini + SMP env cfg (denoiser ckpt path set on
   ``init_smp_state`` below; override it from the task config)."""
   cfg = MiniSmpEnvCfg()
+  if play:
+    _apply_play_overrides(cfg)
+  return cfg
+
+
+def mini_v3_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Build the shared Mini_M1v3 + SMP env cfg (denoiser ckpt path set on
+  ``init_smp_state`` below; override it from the task config)."""
+  cfg = MiniV3SmpEnvCfg()
   if play:
     _apply_play_overrides(cfg)
   return cfg

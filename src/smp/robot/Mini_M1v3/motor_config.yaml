@@ -1,0 +1,129 @@
+defaults:
+  EC-A8116-P1-18H:
+    damping: '0.12883747'
+    armature: '0.063828'
+    frictionloss: '0.7399'
+    solimplimit: '0.95 0.99 0.001'
+    solreflimit: '0.002 1'
+    limited: 'true'
+  EC-A6416-P2-30.25H:
+    damping: '0.1'
+    armature: '0.093956787'
+    frictionloss: '0.42253'
+    solimplimit: '0.95 0.99 0.001'
+    solreflimit: '0.002 1'
+    limited: 'true'
+  EC-A6408-P2-30.25H:
+    damping: '0.1'
+    armature: '0.057648938'
+    frictionloss: '0.42253'
+    solimplimit: '0.95 0.99 0.001'
+    solreflimit: '0.002 1'
+    limited: 'true'
+  EC-A4310-P2-36H:
+    damping: '0.04505626'
+    armature: '0.023328'
+    frictionloss: '0.09318127'
+    solimplimit: '0.95 0.99 0.001'
+    solreflimit: '0.002 1'
+    limited: 'true'
+  EC-A2806-P2-36:
+    damping: '0.05'
+    armature: '0.005522096'
+    frictionloss: '0.08'
+    solimplimit: '0.95 0.99 0.001'
+    solreflimit: '0.002 1'
+    limited: 'true'
+  passive_joint:
+    damping: '0.01'
+    armature: '0.0'
+    frictionloss: '0.0'
+    solimplimit: '0.95 0.99 0.001'
+    solreflimit: '0.002 1'
+    limited: 'true'
+
+# Joint order in this section is used as the preferred body/joint chain order
+# when generating XML directly from a new URDF.
+joint_classes:
+  left_hip_pitch_joint: EC-A8116-P1-18H
+  left_hip_roll_joint: EC-A6416-P2-30.25H
+  left_hip_yaw_joint: EC-A6408-P2-30.25H
+  left_knee_joint: EC-A8116-P1-18H
+  left_ankle_motor_1_joint: EC-A4310-P2-36H
+  left_ankle_motor_2_joint: EC-A4310-P2-36H
+  left_ankle_pitch_joint: passive_joint
+  left_ankle_roll_joint: passive_joint
+  right_hip_pitch_joint: EC-A8116-P1-18H
+  right_hip_roll_joint: EC-A6416-P2-30.25H
+  right_hip_yaw_joint: EC-A6408-P2-30.25H
+  right_knee_joint: EC-A8116-P1-18H
+  right_ankle_motor_1_joint: EC-A4310-P2-36H
+  right_ankle_motor_2_joint: EC-A4310-P2-36H
+  right_ankle_pitch_joint: passive_joint
+  right_ankle_roll_joint: passive_joint
+  waist_joint: EC-A6408-P2-30.25H
+  left_shoulder_pitch_joint: EC-A4310-P2-36H
+  left_shoulder_roll_joint: EC-A4310-P2-36H
+  left_shoulder_yaw_joint: EC-A4310-P2-36H
+  left_elbow_joint: EC-A4310-P2-36H
+  left_wrist_yaw_joint: EC-A4310-P2-36H
+  left_hand_joint: passive_joint
+  right_shoulder_pitch_joint: EC-A4310-P2-36H
+  right_shoulder_roll_joint: EC-A4310-P2-36H
+  right_shoulder_yaw_joint: EC-A4310-P2-36H
+  right_elbow_joint: EC-A4310-P2-36H
+  right_wrist_yaw_joint: EC-A4310-P2-36H
+  right_hand_joint: passive_joint
+  head_yaw_joint: EC-A2806-P2-36
+  head_pitch_joint: EC-A2806-P2-36
+
+joint_axes:
+  left_hip_pitch_joint: 0 1 0
+  left_hip_roll_joint: 1 0 0
+  left_hip_yaw_joint: 0 0 -1
+  left_knee_joint: 0 1 0
+  left_ankle_motor_1_joint: -1 0 0
+  left_ankle_motor_2_joint: -1 0 0
+  left_ankle_pitch_joint: 0 1 0
+  left_ankle_roll_joint: 1 0 0
+  right_hip_pitch_joint: 0 -1 0
+  right_hip_roll_joint: 1 0 0
+  right_hip_yaw_joint: 0 0 -1
+  right_knee_joint: 0 -1 0
+  right_ankle_motor_1_joint: -1 0 0
+  right_ankle_motor_2_joint: -1 0 0
+  right_ankle_pitch_joint: 0 1 0
+  right_ankle_roll_joint: 1 0 0
+  waist_joint: 0 0 1
+  left_shoulder_pitch_joint: 0 1 0
+  left_shoulder_roll_joint: 1 0 0
+  left_shoulder_yaw_joint: 0 0 -1
+  left_elbow_joint: 0 1 0
+  left_wrist_yaw_joint: 0 0 -1
+  left_hand_joint: 0 0 1
+  right_shoulder_pitch_joint: 0 -1 0
+  right_shoulder_roll_joint: 1 0 0
+  right_shoulder_yaw_joint: 0 0 -1
+  right_elbow_joint: 0 -1 0
+  right_wrist_yaw_joint: 0 0 -1
+  right_hand_joint: 0 0 1
+  head_yaw_joint: 0 0 1
+  head_pitch_joint: 0 1 0
+
+ankle_mapping_motor: 
+  angle_motor: 10
+  r_center_motor1: 0.0184 0 -0.0946
+  r_center_motor2: 0.0069 0 -0.1596
+  r_knee_motor: 0.0174
+  r_motor1_link1sp: 0.0 0.02 0.0
+  r_motor2_link2sp: 0.0 -0.02 0.0
+  r_knee_ankpit: 0.0 0.0 -0.261
+  r_ankpit_ankrol: 0.0 0.0 -0.023
+  r_ankrol_footpoint1: 0 0.02 0
+  r_ankrol_footpoint2: 0 -0.02 0
+  r_ankrol_footpoint: 0.0328
+  angle_footpoint: 20
+  L1: 0.184
+  L2: 0.118
+
+imu_pos: 0.0 0.0 -0.12053

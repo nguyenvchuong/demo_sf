@@ -7,6 +7,7 @@ via side-effect imports of each task sub-package.
 from smp.rl.tasks import (
   getup,        # noqa: F401  # registers Smp-Getup-G1
   getup_mini,   # noqa: F401  # registers Smp-Getup-mini
+  getup_mini_m1v3,   # noqa: F401  # registers Smp-Getup-mini-m1v3
   jump_platform_mini,   # noqa: F401  # registers Smp-Jump-Platform-mini
   location,     # noqa: F401  # registers Smp-Location-G1
   steering,     # noqa: F401  # registers Smp-Steering-G1 and Smp-Forward-G1

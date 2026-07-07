@@ -1,4 +1,4 @@
-"""Mini_M1v1 getup task with SMP guidance."""
+"""Mini_M1v3 getup task with SMP guidance."""
 
 from __future__ import annotations
 
@@ -10,32 +10,32 @@ from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 
-from smp.rl.env_cfg import mini_smp_env_cfg
+from smp.rl.env_cfg import mini_v3_smp_env_cfg
 from smp.rl.rewards import task_smp_product
-from smp.rl.tasks.getup_mini import mdp
-from smp.robot.Mini_M1v1.mini_m11_constants import get_spec as _get_mini_spec
+from smp.rl.tasks.getup_mini_m1v3 import mdp
+from smp.robot.Mini_M1v3.mini_m11_constants import get_spec as _get_mini_v3_spec
 
-# Mini_M1v1 geometry (from Mini_M1v1.xml), MEASURED (not guessed):
+# Mini_M1v3 geometry (from Mini_M1v3.xml), MEASURED by FK (not guessed): unlike
+# Mini_M1v1, torso_link already carries an ACTIVE ``head_collision`` capsule
+# geom directly (fromto z=0.425..0.445, so centred at z=0.435) — the disabled
+# ``head_link`` body (commented out, pos 0.31) is dead geometry here, just
+# like on Mini_M1v1. We match the REAL active geom's centre, same convention
+# as G1's HEAD_POS_IN_TORSO (which matches G1's own active head_collision
+# geom).
 #   torso_link at pos="0 0 0" relative to pelvis_link (same height).
-#   head_link (commented-out) at pos="0 0 0.31" from torso_link, and its own
-#   inertial/collision geom is centred a further "0 0 0.05" inside head_link —
-#   so the head's actual centre is 0.31 + 0.05 = 0.36 m above torso (matching
-#   how G1's HEAD_POS_IN_TORSO=0.43 is the head_collision geom's own centre,
-#   not just its parent body's origin).
-#   Standing pelvis height 0.77 m (KNEES_BENT_KEYFRAME) → head centre
-#   0.77 + 0.36 = 1.13 m. (The old "~0.68 m" comment/thresholds were carried
-#   over from a half-scale robot and never re-derived against the real 1.13 m.)
-HEAD_POS_IN_TORSO: tuple[float, float, float] = (0.0, 0.0, 0.36)
+#   Standing pelvis height 0.77 m (KNEES_BENT_KEYFRAME, same leg length as
+#   Mini_M1v1) → head centre 0.77 + 0.435 = 1.205 m.
+HEAD_POS_IN_TORSO: tuple[float, float, float] = (0.012, 0.0, 0.435)
 
-# Reward / termination heights scaled to Mini's MEASURED 1.13 m standing head
-# height, keeping the same relative fractions as the original (wrong-base)
-# thresholds: 95.6% / 73.5% / 91.2% / 44.1% / 61.8% of standing head height.
-HEAD_TARGET_HEIGHT: float = 1.08  # track_head_height goal (just below full stand)
-HEAD_UP_THRESHOLD: float = 0.83  # upward_velocity: drive while head below this
-HEAD_STOOD_UP: float = 1.03  # stood_up: success threshold
+# Reward / termination heights scaled to Mini_M1v3's MEASURED 1.205 m standing
+# head height, keeping the same relative fractions used for Mini_M1v1's
+# (re-derived) thresholds: 95.6% / 73.5% / 91.2% / 44.1% / 61.8%.
+HEAD_TARGET_HEIGHT: float = 1.15  # track_head_height goal (just below full stand)
+HEAD_UP_THRESHOLD: float = 0.89  # upward_velocity: drive while head below this
+HEAD_STOOD_UP: float = 1.10  # stood_up: success threshold
 # Ukemi-specific thresholds.
-HEAD_FLOOR_THRESHOLD: float = 0.50  # soft_landing: below = impact/contact phase
-HEAD_ROLL_THRESHOLD: float = 0.70  # roll_momentum: below = active rolling phase
+HEAD_FLOOR_THRESHOLD: float = 0.53  # soft_landing: below = impact/contact phase
+HEAD_ROLL_THRESHOLD: float = 0.75  # roll_momentum: below = active rolling phase
 
 GROUND_CONTACT_FORCE_SENSOR = ContactSensorCfg(
   name="ground_contact_force",
@@ -46,28 +46,28 @@ GROUND_CONTACT_FORCE_SENSOR = ContactSensorCfg(
 )
 
 
-def get_mini_spec_with_head() -> mujoco.MjSpec:  # type: ignore[attr-defined]
-  """Mini_M1v1 spec with a massless ``head`` site on ``torso_link``."""
-  spec = _get_mini_spec()
+def get_mini_v3_spec_with_head() -> mujoco.MjSpec:  # type: ignore[attr-defined]
+  """Mini_M1v3 spec with a massless ``head`` site on ``torso_link``."""
+  spec = _get_mini_v3_spec()
   torso = spec.body("torso_link")
   if not any(s.name == "head" for s in torso.sites):
     torso.add_site(name="head", pos=HEAD_POS_IN_TORSO)
   return spec
 
 
-def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  """Build the Mini_M1v1 getup env cfg with SMP guidance."""
-  cfg = mini_smp_env_cfg(play=play)
+def mini_v3_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Build the Mini_M1v3 getup env cfg with SMP guidance."""
+  cfg = mini_v3_smp_env_cfg(play=play)
 
   # --- Scene ---------------------------------------------------------------
   # Replace the stock spec with one that has a ``head`` site for rewards.
-  cfg.scene.entities["robot"].spec_fn = get_mini_spec_with_head
+  cfg.scene.entities["robot"].spec_fn = get_mini_v3_spec_with_head
   cfg.scene.sensors = (*cfg.scene.sensors, GROUND_CONTACT_FORCE_SENSOR)
 
   # --- Events --------------------------------------------------------------
-  # pretrained_getup_f2s2.pt is feature_dim=59 (G1, 29 DOF) — incompatible with
-  # Mini (feature_dim=53, 23 DOF). Use the mini checkpoint until a dedicated
-  # Mini getup pretrain is available. Replace this path once you have trained:
+  # Mini_M1v3 has the same 23 actuated DOF / joint names as Mini_M1v1, so the
+  # Mini_M1v1 getup checkpoint's feature_dim should match. Replace this path
+  # once a dedicated Mini_M1v3 getup pretrain is available:
   #   uv run scripts/pretrain.py --data-dir dataset_mini/npz_getup ...
   cfg.events["init_smp_state"].params["ckpt_path"] = (
     "dataset_mini/cmu/new/pretrained.pt"
@@ -75,12 +75,6 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.events["reset_stand_counter"] = EventTermCfg(
     func=mdp.reset_stand_counter, mode="reset"
   )
-
-  # NOTE: the shared push (±0.5 m/s) is kept as-is. GSI already seeds a fraction
-  # of episodes directly in fallen/rolling poses (the prior's manifold reaches
-  # root_z≈0.12, fully inverted), which is the main roll-to-getup practice — so
-  # we do NOT need an aggressive push, and a strong push only risks contact
-  # blow-ups. Revisit (modestly) only once training is confirmed stable.
 
   # --- Rewards -------------------------------------------------------------
   # Ukemi + quick-standup reward (all terms ∈ [0,1], weights sum to 1).
