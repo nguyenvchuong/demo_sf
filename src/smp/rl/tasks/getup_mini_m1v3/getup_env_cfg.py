@@ -13,7 +13,7 @@ from mjlab.sensor import ContactMatch, ContactSensorCfg
 from smp.rl.env_cfg import mini_v3_smp_env_cfg
 from smp.rl.rewards import task_smp_product
 from smp.rl.tasks.getup_mini_m1v3 import mdp
-from smp.robot.Mini_M1v3.mini_m11_constants import get_spec as _get_mini_v3_spec
+from smp.robot.Mini_M1v3.mini_m13_constants import get_spec as _get_mini_v3_spec
 
 # Mini_M1v3 geometry (from Mini_M1v3.xml), MEASURED by FK (not guessed): unlike
 # Mini_M1v1, torso_link already carries an ACTIVE ``head_collision`` capsule

@@ -78,11 +78,11 @@ DAMPING_EC_A4310_P2_36H = 2.0 * DAMPING_RATIO * ARMATURE_EC_A4310_P2_36H * NATUR
 # Derived from G1/Unitree public proxies and peer motor families (no public datasheet
 # exists for these exact Encos IDs). Update when hardware bench data is available.
 VELOCITY_LIMIT_EC_A4310_P2_36H  = 18.5   # rad/s – small arm/ankle motor
-VELOCITY_LIMIT_ANKLE_PITCH  = 15.0   # rad/s – small arm/ankle motor
-VELOCITY_LIMIT_ANKLE_ROLL  = 22.0   # rad/s – small arm/ankle motor
-VELOCITY_LIMIT_EC_A8116_P1_18H  = 20.0   # rad/s – large hip-pitch / knee motor
-VELOCITY_LIMIT_EC_A6416_P2_30_25H = 20.0 # rad/s – hip-roll motor
-VELOCITY_LIMIT_EC_A6408_P2_30_25H = 15.0 # rad/s – hip-yaw / waist motor
+VELOCITY_LIMIT_ANKLE_PITCH  = 10.0   # rad/s – small arm/ankle motor
+VELOCITY_LIMIT_ANKLE_ROLL  = 15.0   # rad/s – small arm/ankle motor
+VELOCITY_LIMIT_EC_A8116_P1_18H  = 13.0   # rad/s – large hip-pitch / knee motor
+VELOCITY_LIMIT_EC_A6416_P2_30_25H = 13.0 # rad/s – hip-roll motor
+VELOCITY_LIMIT_EC_A6408_P2_30_25H = 10.0 # rad/s – hip-yaw / waist motor
 
 SATURATION_EFFORT_EC_A4310_P2_36H   =  30.0  # Nm – equal to effort_limit (conservative)
 SATURATION_EFFORT_EC_ANKLE_PITCH   =  24.0  # Nm – equal to effort_limit (conservative)
