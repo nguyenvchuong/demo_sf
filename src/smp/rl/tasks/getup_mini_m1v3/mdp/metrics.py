@@ -10,7 +10,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.sensor.contact_sensor import ContactSensor
 
-from smp.robot.Mini_M1v3.mini_m11_constants import MINI_M1V3_XML
+from smp.robot.Mini_M1v3.mini_m13_constants import MINI_M1V3_XML
 
 __all__ = [
   "peak_ground_contact_force",
