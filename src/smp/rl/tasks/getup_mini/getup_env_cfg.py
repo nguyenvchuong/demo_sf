@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mujoco
 from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.envs import mdp as base_mdp
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
@@ -179,6 +180,23 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         ),
       ),
     },
+  )
+
+  # --- Smoothness penalties -------------------------------------------------
+  # The task terms above all saturate to ~1.0 once standing, leaving a flat
+  # reward gradient with nothing penalising high-frequency action/joint
+  # chatter — the robot buzzes/vibrates when settled. These separate
+  # negative-weight terms (summed by the reward manager alongside the [0,1]
+  # task_smp_product) regularise the motion. Kept small so they don't fight the
+  # getup/rolling phase; action_rate is the dominant anti-vibration term.
+  cfg.rewards["action_rate"] = RewardTermCfg(
+    func=base_mdp.action_rate_l2, weight=-0.01
+  )
+  cfg.rewards["action_acc"] = RewardTermCfg(
+    func=base_mdp.action_acc_l2, weight=-0.001
+  )
+  cfg.rewards["joint_vel"] = RewardTermCfg(
+    func=base_mdp.joint_vel_l2, weight=-1e-3
   )
 
   # --- Terminations --------------------------------------------------------

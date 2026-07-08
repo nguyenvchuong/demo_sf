@@ -280,11 +280,11 @@
         <geom class="visual" mesh="torso_link" />
         <geom name="torso_collision" class="collision" type="box" size="0.08 0.1 0.125" pos="0 0 0.185" />
         <geom name="torso_connect_collision" class="collision" type="cylinder" size="0.045 0.025" pos="0 0 0.03" />
-        <body name="head_link" pos="0 0 0.31" quat="1 0 0 0">
+        <!-- <body name="head_link" pos="0 0 0.31" quat="1 0 0 0">
           <inertial pos="0 0 0.05" quat="1 0 0 0" mass="3.0" diaginertia="0.003333 0.003333 0.003333" />
           <geom name="head_visual" class="visual" type="box" size="0.05 0.05 0.05" pos="0 0 0.05" />
           <geom name="head_collision" class="collision" type="box" size="0.05 0.05 0.05" pos="0 0 0.05" />
-        </body>
+        </body> -->
         <body name="left_shoulder_pitch_link" pos="0 0.1145 0.262" quat="1 0 0 0">
           <inertial pos="0.00314586 0.04206211 -0.00024138" quat="0.7211335 0.6616006 -0.2047462 0.01817094" mass="0.64542046" diaginertia="0.0003139259 0.0003248269 0.0002372973" />
           <joint name="left_shoulder_pitch_joint" pos="0 0 0" class="shoulder_pitch"/>
