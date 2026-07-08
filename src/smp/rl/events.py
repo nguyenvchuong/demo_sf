@@ -48,13 +48,21 @@ def init_smp_state(
   gsi_batch_size: int = 256,
   compile_model: bool = True,
   compile_mode: str | None = None,
+  smp_z_offset: float = 0.0,
 ) -> None:
   """Startup-mode event: load the frozen denoiser, allocate the feature buffer +
   ``DiffNormalizer`` (stashed on the env), and pre-generate the GSI pool of
   ``gsi_buffer_size`` windows that ``gsi_reset`` samples from (amortizes the DDPM
   cost).  If ``compile_model``, the denoiser is ``torch.compile``-d and pre-warmed
-  so Inductor compiles here, not on the first sim step."""
+  so Inductor compiles here, not on the first sim step.
+
+  ``smp_z_offset`` raises the GSI-placed robot by this many metres in the SIM
+  while keeping the SMP feature world floor at 0 (the reward subtracts it back
+  out). Use it when the robot stands on a raised surface (e.g. a platform of
+  height ``smp_z_offset``): the whole prior motion then plays out ON TOP of that
+  surface instead of inside it, without the prior seeing an off-manifold z."""
   del env_ids
+  env._smp_z_offset = float(smp_z_offset)  # type: ignore[attr-defined]
   if not ckpt_path:
     msg = (
       "init_smp_state called without `ckpt_path`. Set it on the EventTermCfg: "
@@ -160,11 +168,18 @@ def _prime_sim_and_buffer(
   ee_offset_w = quat_apply(yaw_T_E, ee_pos_local.reshape(-1, 3)).reshape(n, W, E, 3)
   ee_pos_w = ee_offset_w + pelvis_pos_w[:, :, None, :]
 
-  # Buffer stays env-relative; the sim write is offset to each env's origin.
+  # Buffer stays env-relative (SMP world, floor=0); the sim write is offset to
+  # each env's origin and raised by smp_z_offset so the robot is placed ON a
+  # raised surface of that height (the reward subtracts the offset back out).
   origins = env.scene.env_origins[env_ids]
+  z_off = getattr(env, "_smp_z_offset", 0.0)
+  sim_root_pos = pelvis_pos_w[:, -1] + origins
+  if z_off:
+    sim_root_pos = sim_root_pos.clone()
+    sim_root_pos[:, 2] += z_off
   last_root_state = torch.cat(
     [
-      pelvis_pos_w[:, -1] + origins,
+      sim_root_pos,
       pelvis_quat_w[:, -1],
       lin_vel_w[:, -1],
       ang_vel_w[:, -1],
@@ -246,3 +261,100 @@ def gsi_reset(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None = None) -> No
   idx = torch.randint(0, pool.shape[0], (n,), device=env.device)
   window = pool[idx]
   _prime_sim_and_buffer(env, env_ids, window)
+
+
+@torch.no_grad()
+def reset_stand_on_platform(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | None = None,
+  stand_fraction: float = 0.5,
+  pelvis_height: float = 0.77,
+  ee_offsets: tuple[tuple[float, float, float], ...] | None = None,
+  top_geom_name: str = "stair_top_collision",
+  top_geom_half_height: float = 0.30,
+  spawn_x_offset: float = 0.0,
+) -> None:
+  """Reset-mode event: place a ``stand_fraction`` subset of envs STABLY standing on
+  the (randomized) top tread, so the episode begins from a clean platform stance and
+  the diffusion reward drives the jump-off — instead of GSI seeding every env in a
+  random motion phase (mid-air / falling), which wobbles on the narrow tread.
+
+  Must run AFTER ``gsi_reset`` (it overrides GSI for the chosen envs) and AFTER the
+  ``randomize_platform_height`` event (it reads each env's randomized tread height so
+  the feet rest exactly on the surface). The stance is the robot's default keyframe
+  (``KNEES_BENT``, all-zero joints) with ZERO root/joint velocity, pelvis at
+  ``tread_surface + pelvis_height``. The SMP feature buffer is re-primed with a static
+  standing window (env-origin-relative, floor at 0) so the SMP reward is consistent
+  from step 0. ``ee_offsets`` are the end-effector positions relative to the pelvis at
+  this stance (precomputed by FK; see ``jump_platform_env_cfg``). ``spawn_x_offset``
+  shifts the stance along the robot's facing (+x) in the env-local frame: use a
+  NEGATIVE value to set the robot BACK from the drop edge so it has full foot
+  support and stands stably (rather than teetering at the lip of the platform)."""
+  if env_ids is None:
+    env_ids = torch.arange(env.num_envs, device=env.device)
+  n = int(env_ids.numel())
+  if n == 0 or stand_fraction <= 0.0:
+    return
+
+  # Per-env Bernoulli selection so it works for any num_envs (incl. play's 1 env).
+  stand_ids = env_ids[torch.rand(n, device=env.device) < stand_fraction]
+  k = int(stand_ids.numel())
+  if k == 0:
+    return
+
+  robot = env.scene["robot"]
+
+  # Global geom index of the top tread (cache across resets).
+  gidx = getattr(env, "_top_stair_gidx", None)
+  if gidx is None:
+    gnames = list(robot.geom_names)
+    gidx = int(robot.indexing.geom_ids[gnames.index(top_geom_name)].item())
+    env._top_stair_gidx = gidx  # type: ignore[attr-defined]
+
+  # Per-env tread surface height (local to env origin), from the randomized geom.
+  surface = env.sim.model.geom_pos[stand_ids, gidx, 2] + top_geom_half_height
+  origins = env.scene.env_origins[stand_ids]
+
+  # --- sim state: stable upright stance, feet on the tread, zero velocity --------
+  jp = robot.data.default_joint_pos[stand_ids].clone()  # KNEES_BENT (all-zero) stance
+  jv = torch.zeros_like(jp)
+  pos = origins.clone()
+  pos[:, 0] = origins[:, 0] + spawn_x_offset
+  pos[:, 2] = origins[:, 2] + surface + pelvis_height
+  quat = torch.zeros(k, 4, device=env.device)
+  quat[:, 0] = 1.0  # identity: upright, facing +x (the prior's jump direction)
+  root_state = torch.cat([pos, quat, torch.zeros(k, 6, device=env.device)], dim=-1)
+  robot.write_root_state_to_sim(root_state, env_ids=stand_ids)
+  robot.write_joint_state_to_sim(jp, jv, env_ids=stand_ids)
+
+  # --- re-prime the SMP buffer with a static standing window ----------------------
+  buf = getattr(env, "_smp_buffer", None)
+  if buf is None:
+    return
+  W = buf.window_size
+  z_off = getattr(env, "_smp_z_offset", 0.0)
+  # Buffer frame is env-origin-relative with floor at 0 (matches _update_buffer_from_sim).
+  root_pos_rel = torch.zeros(k, 3, device=env.device)
+  root_pos_rel[:, 0] = spawn_x_offset
+  root_pos_rel[:, 2] = surface + pelvis_height - z_off
+  root_pos_win = root_pos_rel[:, None, :].expand(k, W, 3).contiguous()
+  quat_win = torch.zeros(k, W, 4, device=env.device)
+  quat_win[..., 0] = 1.0
+  zero3 = torch.zeros(k, W, 3, device=env.device)
+  jp_win = jp[:, None, :].expand(k, W, jp.shape[-1]).contiguous()
+  jv_win = torch.zeros_like(jp_win)
+  if ee_offsets is not None:
+    ee_off = torch.tensor(ee_offsets, device=env.device, dtype=root_pos_win.dtype)
+    ee_pos_win = root_pos_win[:, :, None, :] + ee_off[None, None, :, :]
+  else:
+    ee_pos_win = root_pos_win[:, :, None, :].expand(k, W, NUM_EE, 3).contiguous()
+  buf.reset(
+    stand_ids,
+    root_pos_win,
+    quat_win,
+    zero3,
+    zero3,
+    ee_pos_win,
+    jp_win,
+    jv_win,
+  )

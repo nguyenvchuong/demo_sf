@@ -3,14 +3,8 @@
 from pathlib import Path
 
 import mujoco
-
-from mjlab import MJLAB_SRC_PATH
 from mjlab.actuator import DcMotorActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
-from mjlab.utils.actuator import (
-  ElectricActuator,
-  reflected_inertia_from_two_stage_planetary,
-)
 from mjlab.utils.spec_config import CollisionCfg
 
 ##
@@ -83,12 +77,12 @@ DAMPING_EC_A4310_P2_36H = 2.0 * DAMPING_RATIO * ARMATURE_EC_A4310_P2_36H * NATUR
 #
 # Derived from G1/Unitree public proxies and peer motor families (no public datasheet
 # exists for these exact Encos IDs). Update when hardware bench data is available.
-VELOCITY_LIMIT_EC_A4310_P2_36H  = 12.5   # rad/s – small arm/ankle motor
-VELOCITY_LIMIT_ANKLE_PITCH  = 10.0   # rad/s – small arm/ankle motor
-VELOCITY_LIMIT_ANKLE_ROLL  = 15.0   # rad/s – small arm/ankle motor
-VELOCITY_LIMIT_EC_A8116_P1_18H  = 13.0   # rad/s – large hip-pitch / knee motor
-VELOCITY_LIMIT_EC_A6416_P2_30_25H = 13.0 # rad/s – hip-roll motor
-VELOCITY_LIMIT_EC_A6408_P2_30_25H = 10.0 # rad/s – hip-yaw / waist motor
+VELOCITY_LIMIT_EC_A4310_P2_36H  = 25.5   # rad/s – small arm/ankle motor
+VELOCITY_LIMIT_ANKLE_PITCH  = 35.0   # rad/s – small arm/ankle motor
+VELOCITY_LIMIT_ANKLE_ROLL  = 32.0   # rad/s – small arm/ankle motor
+VELOCITY_LIMIT_EC_A8116_P1_18H  = 30.0   # rad/s – large hip-pitch / knee motor
+VELOCITY_LIMIT_EC_A6416_P2_30_25H = 30.0 # rad/s – hip-roll motor
+VELOCITY_LIMIT_EC_A6408_P2_30_25H = 25.0 # rad/s – hip-yaw / waist motor
 
 SATURATION_EFFORT_EC_A4310_P2_36H   =  30.0  # Nm – equal to effort_limit (conservative)
 SATURATION_EFFORT_EC_ANKLE_PITCH   =  24.0  # Nm – equal to effort_limit (conservative)
@@ -108,6 +102,30 @@ SATURATION_EFFORT_EC_A6408_P2_30_25H =  60.0  # Nm – ~1.14x continuous
 #   armature=ARMATURE_EC00,
 # )
 
+# Actuator command latency (sim2real), modeling comm + motor response delay
+# between the policy's position command and the motor acting on it. Mirrors
+# vm_lab_rr, which models all latency at the actuator/position level (see
+# m2v3.py DelayedInstinctActuatorCfg + sync_actuator_delays, lag_range=(1,3)).
+#
+# Lag is in PHYSICS steps (5 ms each), sampled in [0, 3] = 0-15 ms. Unlike the
+# previous config (which resampled the lag EVERY physics step -> unrealistic
+# 200 Hz jitter that the policy just learns to ignore), the lag here is HELD per
+# robot and drifts slowly: an env only reconsiders its lag every
+# delay_update_period steps, and even then keeps the old value with probability
+# delay_hold_prob. With period=50 (0.25 s) and hold_prob=0.9 the effective
+# latency stays roughly constant over multi-second windows -- a faithful stand-in
+# for a real robot's near-constant comm/motor dead-time, which is what actually
+# makes an instant-feedback policy react sluggishly on hardware. per_env_phase
+# staggers the (rare) updates across envs so they don't change in lockstep.
+_ACTUATOR_DELAY = dict(
+  delay_min_lag=0,
+  delay_max_lag=3,
+  delay_update_period=50,
+  delay_hold_prob=0.9,
+  delay_per_env_phase=True,
+)
+
+
 MINI_M1V1_ACTUATOR_EC_A4310_P2_36H = DcMotorActuatorCfg(
   target_names_expr=(
     ".*_shoulder_pitch_joint",
@@ -122,8 +140,7 @@ MINI_M1V1_ACTUATOR_EC_A4310_P2_36H = DcMotorActuatorCfg(
   saturation_effort=SATURATION_EFFORT_EC_A4310_P2_36H,
   velocity_limit=VELOCITY_LIMIT_EC_A4310_P2_36H,
   armature=ARMATURE_EC_A4310_P2_36H,
-  delay_min_lag=0,  # Minimum 2 physics steps
-  delay_max_lag=3,  # Maximum 5 physics steps
+  **_ACTUATOR_DELAY,
 )
 
 
@@ -135,8 +152,7 @@ MINI_M1V1_ACTUATOR_EC_A8116_P1_18H = DcMotorActuatorCfg(
   saturation_effort=SATURATION_EFFORT_EC_A8116_P1_18H,
   velocity_limit=VELOCITY_LIMIT_EC_A8116_P1_18H,
   armature=ARMATURE_EC_A8116_P1_18H,
-  delay_min_lag=0,  # Minimum 2 physics steps
-  delay_max_lag=3,  # Maximum 5 physics steps
+  **_ACTUATOR_DELAY,
 )
 
 MINI_M1V1_ACTUATOR_EC_A6416_P2_30_25H = DcMotorActuatorCfg(
@@ -147,8 +163,7 @@ MINI_M1V1_ACTUATOR_EC_A6416_P2_30_25H = DcMotorActuatorCfg(
   saturation_effort=SATURATION_EFFORT_EC_A6416_P2_30_25H,
   velocity_limit=VELOCITY_LIMIT_EC_A6416_P2_30_25H,
   armature=ARMATURE_EC_A6416_P2_30_25H,
-  delay_min_lag=0,  # Minimum 2 physics steps
-  delay_max_lag=3,  # Maximum 5 physics steps
+  **_ACTUATOR_DELAY,
 )
 
 MINI_M1V1_ACTUATOR_EC_A6408_P2_30_25H = DcMotorActuatorCfg(
@@ -159,8 +174,7 @@ MINI_M1V1_ACTUATOR_EC_A6408_P2_30_25H = DcMotorActuatorCfg(
   saturation_effort=SATURATION_EFFORT_EC_A6408_P2_30_25H,
   velocity_limit=VELOCITY_LIMIT_EC_A6408_P2_30_25H,
   armature=ARMATURE_EC_A6408_P2_30_25H,
-  delay_min_lag=0,  # Minimum 2 physics steps
-  delay_max_lag=3,  # Maximum 5 physics steps
+  **_ACTUATOR_DELAY,
 )
 
 # M23_ACTUATOR_EC05 = BuiltinPositionActuatorCfg(
@@ -197,6 +211,7 @@ MINI_M1V1_ACTUATOR_EC_ANKLE_PITCH = DcMotorActuatorCfg(
   saturation_effort=SATURATION_EFFORT_EC_ANKLE_PITCH ,
   velocity_limit=VELOCITY_LIMIT_ANKLE_PITCH,
   armature=ARMATURE_EC_A4310_P2_36H,
+  **_ACTUATOR_DELAY,
 )
 
 MINI_M1V1_ACTUATOR_EC_ANKLE_ROLL = DcMotorActuatorCfg(
@@ -208,6 +223,7 @@ MINI_M1V1_ACTUATOR_EC_ANKLE_ROLL = DcMotorActuatorCfg(
   saturation_effort=SATURATION_EFFORT_EC_ANKLE_ROLL ,
   velocity_limit=VELOCITY_LIMIT_ANKLE_ROLL,
   armature=ARMATURE_EC_A4310_P2_36H ,
+  **_ACTUATOR_DELAY,
 )
 
 ##

@@ -1,0 +1,66 @@
+<mujoco model="minim1 stair scene">
+  <include file="Mini_M1v1.xml"/>
+
+  <statistic center="0.0 0.0 0.6" extent="3.5"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="-130" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <material name="stair" rgba="0.55 0.55 0.6 1" reflectance="0.1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+
+    <!-- Ground at z=0: the robot spawns at the origin standing on the floor. -->
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"
+      friction="1.0 0.01 0.001"/>
+
+    <!-- Symmetric staircase sitting ON the floor, centered on y=0 and shifted
+         so the top platform (the highest tread, z=0.60) is centered at the
+         origin: the robot spawns standing on top of it, rotated 90° relative
+         to the stair's ascend/descend axis (which still runs along x).
+         Ascends in +x (3 steps × 0.15 m) from a platform edge at x=-0.75 up
+         to the platform center, then descends symmetrically to x=0.75. Each
+         box is filled from the floor up to its tread; all steps are 1.2 m
+         wide (y). -->
+    <body name="stairs" pos="0 0 0">
+      <!-- ascent (near side): edge at x=-2.0 -->
+      <geom name="stair_up_1" type="box" material="stair" friction="1.0 0.01 0.001"
+        pos="-2.00 0 0.075" size="0.25 0.6 0.075"/>  <!-- tread z=0.15, x[-2.25,-1.75] -->
+      <geom name="stair_up_2" type="box" material="stair" friction="1.0 0.01 0.001"
+        pos="-1.50 0 0.150" size="0.25 0.6 0.150"/>  <!-- tread z=0.30, x[-1.75,-1.25] -->
+      <geom name="stair_up_3" type="box" material="stair" friction="1.0 0.01 0.001"
+        pos="-1.00 0 0.225" size="0.25 0.6 0.225"/>  <!-- tread z=0.45, x[-1.25,-0.75] -->
+
+      <!-- top platform: tread z=0.60, 1.5 m deep, x[-0.75,0.75]; robot spawns
+           at its center (0,0), rotated 90° about z relative to this axis. -->
+      <geom name="stair_top" type="box" material="stair" friction="1.0 0.01 0.001"
+        pos="0.00 0 0.300" size="0.75 0.6 0.300"/>
+
+      <!-- descent (far side, mirror of the ascent about the platform center) -->
+      <geom name="stair_down_3" type="box" material="stair" friction="1.0 0.01 0.001"
+        pos="1.00 0 0.225" size="0.25 0.6 0.225"/>  <!-- tread z=0.45, x[0.75,1.25] -->
+      <geom name="stair_down_2" type="box" material="stair" friction="1.0 0.01 0.001"
+        pos="1.50 0 0.150" size="0.25 0.6 0.150"/>  <!-- tread z=0.30, x[1.25,1.75] -->
+      <geom name="stair_down_1" type="box" material="stair" friction="1.0 0.01 0.001"
+        pos="2.00 0 0.075" size="0.25 0.6 0.075"/>  <!-- tread z=0.15, x[1.75,2.25] -->
+    </body>
+  </worldbody>
+
+  <!-- Robot spawn override: stand on top of the platform (z=0.60 tread, plus
+       the model's normal 0.8 m standing pelvis height) and yaw 90° so the
+       robot faces perpendicular to the stair's ascend/descend axis (x). -->
+  <keyframe>
+    <key name="on_platform_perpendicular"
+      qpos="0 0 1.45  0.70710678 0 0 0.70710678  0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"/>
+  </keyframe>
+</mujoco>

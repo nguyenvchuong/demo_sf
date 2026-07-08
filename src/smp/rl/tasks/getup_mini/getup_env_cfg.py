@@ -4,28 +4,47 @@ from __future__ import annotations
 
 import mujoco
 from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.envs import mdp as base_mdp
 from mjlab.managers.event_manager import EventTermCfg
+from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
+from mjlab.sensor import ContactMatch, ContactSensorCfg
 
 from smp.rl.env_cfg import mini_smp_env_cfg
 from smp.rl.rewards import task_smp_product
 from smp.rl.tasks.getup_mini import mdp
 from smp.robot.Mini_M1v1.mini_m11_constants import get_spec as _get_mini_spec
 
-# Mini_M1v1 geometry (from Mini_M1v1.xml):
+# Mini_M1v1 geometry (from Mini_M1v1.xml), MEASURED (not guessed):
 #   torso_link at pos="0 0 0" relative to pelvis_link (same height).
-#   head_link (commented-out) at pos="0 0 0.31" from torso_link.
-#   Standing pelvis height ~0.37 m  →  head centre ~0.37 + 0.31 = 0.68 m.
-HEAD_POS_IN_TORSO: tuple[float, float, float] = (0.0, 0.0, 0.31)
+#   head_link (commented-out) at pos="0 0 0.31" from torso_link, and its own
+#   inertial/collision geom is centred a further "0 0 0.05" inside head_link —
+#   so the head's actual centre is 0.31 + 0.05 = 0.36 m above torso (matching
+#   how G1's HEAD_POS_IN_TORSO=0.43 is the head_collision geom's own centre,
+#   not just its parent body's origin).
+#   Standing pelvis height 0.77 m (KNEES_BENT_KEYFRAME) → head centre
+#   0.77 + 0.36 = 1.13 m. (The old "~0.68 m" comment/thresholds were carried
+#   over from a half-scale robot and never re-derived against the real 1.13 m.)
+HEAD_POS_IN_TORSO: tuple[float, float, float] = (0.0, 0.0, 0.36)
 
-# Reward / termination heights scaled to Mini's ~0.68 m standing head height.
-HEAD_TARGET_HEIGHT: float = 0.65        # track_head_height goal (just below full stand)
-HEAD_UP_THRESHOLD: float = 0.50         # upward_velocity: drive while head below this
-HEAD_STOOD_UP: float = 0.62             # stood_up: success threshold
+# Reward / termination heights scaled to Mini's MEASURED 1.13 m standing head
+# height, keeping the same relative fractions as the original (wrong-base)
+# thresholds: 95.6% / 73.5% / 91.2% / 44.1% / 61.8% of standing head height.
+HEAD_TARGET_HEIGHT: float = 1.08  # track_head_height goal (just below full stand)
+HEAD_UP_THRESHOLD: float = 0.83  # upward_velocity: drive while head below this
+HEAD_STOOD_UP: float = 1.03  # stood_up: success threshold
 # Ukemi-specific thresholds.
-HEAD_FLOOR_THRESHOLD: float = 0.30      # soft_landing: below = impact/contact phase
-HEAD_ROLL_THRESHOLD: float = 0.42       # roll_momentum: below = active rolling phase
+HEAD_FLOOR_THRESHOLD: float = 0.50  # soft_landing: below = impact/contact phase
+HEAD_ROLL_THRESHOLD: float = 0.70  # roll_momentum: below = active rolling phase
+
+GROUND_CONTACT_FORCE_SENSOR = ContactSensorCfg(
+  name="ground_contact_force",
+  primary=ContactMatch(mode="body", pattern=".*", entity="robot"),
+  secondary=ContactMatch(mode="body", pattern="terrain"),
+  fields=("found", "force"),
+  reduce="maxforce",
+)
 
 
 def get_mini_spec_with_head() -> mujoco.MjSpec:  # type: ignore[attr-defined]
@@ -44,6 +63,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # --- Scene ---------------------------------------------------------------
   # Replace the stock spec with one that has a ``head`` site for rewards.
   cfg.scene.entities["robot"].spec_fn = get_mini_spec_with_head
+  cfg.scene.sensors = (*cfg.scene.sensors, GROUND_CONTACT_FORCE_SENSOR)
 
   # --- Events --------------------------------------------------------------
   # pretrained_getup_f2s2.pt is feature_dim=59 (G1, 29 DOF) — incompatible with
@@ -51,7 +71,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # Mini getup pretrain is available. Replace this path once you have trained:
   #   uv run scripts/pretrain.py --data-dir dataset_mini/npz_getup ...
   cfg.events["init_smp_state"].params["ckpt_path"] = (
-    "logs/pretrain/pretrain/20260606_181755/pretrained.pt"
+    "dataset_mini/cmu/new/pretrained.pt"
   )
   cfg.events["reset_stand_counter"] = EventTermCfg(
     func=mdp.reset_stand_counter, mode="reset"
@@ -90,7 +110,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     func=task_smp_product,
     weight=1.0,
     params={
-      "smp_floor": 0.3,
+      "smp_floor": 0.0,
       "task_terms": (
         # Always-on: rotate the torso upright from ANY pose (core getup signal).
         (
@@ -122,7 +142,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
           mdp.proactive_roll,
           0.20,
           {
-            "tilt_threshold": 0.6,
+            "tilt_threshold": 0.01,
             "target_ang_vel": 2.0,
             "scale": 0.5,
           },
@@ -130,7 +150,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # On-ground rolling: keep rotating once already low (head < threshold).
         (
           mdp.roll_momentum,
-          0.10,
+          0.05,
           {
             "target_ang_vel": 1.5,
             "scale": 1.0,
@@ -140,14 +160,43 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # Impact phase: reward soft (rolling) landing — penalise hard fall speed.
         (
           mdp.soft_landing,
-          0.10,
+          0.05,
           {
             "scale": 4.0,
             "head_floor_threshold": HEAD_FLOOR_THRESHOLD,
           },
         ),
+        # Rolling phase: penalise high peak ground-contact force, so rolling
+        # spreads impact across the body/time instead of slamming one link.
+        (
+          mdp.rolling_contact_force,
+          0.10,
+          {
+            "sensor_name": GROUND_CONTACT_FORCE_SENSOR.name,
+            "max_force": 150.0,
+            "scale": 1.0,
+            "head_roll_threshold": HEAD_ROLL_THRESHOLD,
+          },
+        ),
       ),
     },
+  )
+
+  # --- Smoothness penalties -------------------------------------------------
+  # The task terms above all saturate to ~1.0 once standing, leaving a flat
+  # reward gradient with nothing penalising high-frequency action/joint
+  # chatter — the robot buzzes/vibrates when settled. These separate
+  # negative-weight terms (summed by the reward manager alongside the [0,1]
+  # task_smp_product) regularise the motion. Kept small so they don't fight the
+  # getup/rolling phase; action_rate is the dominant anti-vibration term.
+  cfg.rewards["action_rate"] = RewardTermCfg(
+    func=base_mdp.action_rate_l2, weight=-0.01
+  )
+  cfg.rewards["action_acc"] = RewardTermCfg(
+    func=base_mdp.action_acc_l2, weight=-0.001
+  )
+  cfg.rewards["joint_vel"] = RewardTermCfg(
+    func=base_mdp.joint_vel_l2, weight=-1e-3
   )
 
   # --- Terminations --------------------------------------------------------
@@ -183,6 +232,22 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     time_out=True,
     params={"head_height": HEAD_STOOD_UP, "max_speed": 0.5, "hold_steps": 25},
   )
+
+  # --- Metrics (live plots in Viser + episode logs during training) ----------
+  _force_sensor = GROUND_CONTACT_FORCE_SENSOR.name
+  cfg.metrics = {
+    "peak_contact_force_N": MetricsTermCfg(
+      func=mdp.peak_ground_contact_force,
+      params={"sensor_name": _force_sensor},
+    ),
+    "ground_contacting_bodies": MetricsTermCfg(
+      func=mdp.ground_contacting_bodies,
+      params={"sensor_name": _force_sensor},
+    ),
+    "head_height_m": MetricsTermCfg(func=mdp.head_height),
+    "pelvis_downward_speed_mps": MetricsTermCfg(func=mdp.pelvis_downward_speed),
+    **mdp.make_per_link_peak_force_metrics(_force_sensor),
+  }
 
   cfg.episode_length_s = 5
 

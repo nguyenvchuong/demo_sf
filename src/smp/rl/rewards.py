@@ -23,12 +23,23 @@ def _update_buffer_from_sim(env: ManagerBasedRlEnv) -> None:
   ee_indexes = env._smp_ee_indexes  # type: ignore[attr-defined]
   buffer: MotionFeatureBuffer = env._smp_buffer  # type: ignore[attr-defined]
   origins = env.scene.env_origins
+  root_pos = robot.data.root_link_pos_w - origins
+  ee_pos = robot.data.body_link_pos_w[:, ee_indexes] - origins[:, None, :]
+  # Undo the GSI sim z-offset so the prior sees motion relative to a floor at 0
+  # (the robot physically stands on a raised surface). Subtracting from BOTH
+  # root and EE leaves the ee−root feature unchanged and only lowers root_pos_z.
+  z_off = getattr(env, "_smp_z_offset", 0.0)
+  if z_off:
+    root_pos = root_pos.clone()
+    root_pos[:, 2] -= z_off
+    ee_pos = ee_pos.clone()
+    ee_pos[..., 2] -= z_off
   buffer.update(
-    robot.data.root_link_pos_w - origins,
+    root_pos,
     robot.data.root_link_quat_w,
     robot.data.root_link_lin_vel_w,
     robot.data.root_link_ang_vel_w,
-    robot.data.body_link_pos_w[:, ee_indexes] - origins[:, None, :],
+    ee_pos,
     robot.data.joint_pos,
     robot.data.joint_vel,
   )

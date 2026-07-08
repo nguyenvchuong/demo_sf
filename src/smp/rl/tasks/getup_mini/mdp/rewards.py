@@ -1,8 +1,8 @@
 """Reward components for the ukemi + getup task.
 
-Phase structure (Mini ~0.68 m standing head height):
-  Phase 1 — impact    (head < ~0.30 m): ``soft_landing``   rewards low fall speed
-  Phase 1–2 — rolling (head < ~0.42 m): ``roll_momentum``  rewards active rolling
+Phase structure (Mini ~1.13 m standing head height):
+  Phase 1 — impact    (head < ~0.50 m): ``soft_landing``   rewards low fall speed
+  Phase 1–2 — rolling (head < ~0.70 m): ``roll_momentum``  rewards active rolling
   Phase 2–3 — standup (head rising):    ``upward_velocity`` + ``track_head_height``
 
 All phase terms return 1.0 outside their active window so they do not compete.
@@ -21,7 +21,35 @@ __all__ = [
   "soft_landing",
   "roll_momentum",
   "proactive_roll",
+  "descend_off_platform",
+  "rolling_contact_force",
 ]
+
+
+def descend_off_platform(
+  env: ManagerBasedRlEnv,
+  target_height: float = 0.80,
+  scale: float = 4.0,
+) -> torch.Tensor:
+  """Reward leaving a raised platform and getting the base down to FLOOR level.
+
+  ``base_z`` (pelvis world z, env-origin relative) ABOVE ``target_height`` (the
+  ~0.80 m floor-standing pelvis height) is penalised — so standing on a 0.60 m
+  platform (base ≈ 1.37 m) is NO LONGER free reward, which is what drives the
+  jump-off. At or below floor-standing it returns 1.0, so the descent, the low
+  roll, and the final floor stand are all un-penalised:
+  ``exp(-scale·max(base_z − target_height, 0)²)``.
+
+  The JUMP-OFF driver for the jump-platform task. Without it the always-on
+  ``track_head_height`` / ``upright_progress`` terms saturate to 1.0 on the
+  platform (head far above the 0.65 m target = overshoot), giving the robot no
+  reason to leave it. (Inert for the plain getup task, where base never exceeds
+  ~0.80 m, so it returns 1.0 throughout there.)
+  """
+  robot = env.scene["robot"]
+  base_z = robot.data.root_link_pos_w[:, 2] - env.scene.env_origins[:, 2]
+  over = torch.clamp(base_z - target_height, min=0.0)
+  return torch.exp(-scale * over * over)
 
 
 def upright_progress(
@@ -160,4 +188,36 @@ def roll_momentum(
   ang_mag = torch.norm(ang_xy, dim=-1)
   shortfall = torch.clamp(ang_mag - target_ang_vel, max=0.0)
   shaped = torch.exp(-scale * shortfall * shortfall)
+  return torch.where(head_z < head_roll_threshold, shaped, torch.ones_like(shaped))
+
+
+def rolling_contact_force(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  max_force: float = 150.0,
+  scale: float = 1.0,
+  head_roll_threshold: float = 0.42,
+) -> torch.Tensor:
+  """Reward LOW peak ground-contact force while actively rolling (head < threshold).
+
+  A good roll spreads impact across the body and over time rather than
+  slamming a single link into the floor — this penalises exactly that spike.
+  Takes the per-body contact-force magnitude from ``sensor_name`` (a
+  robot-vs-terrain ``ContactSensorCfg``), reduces to the single worst contact
+  this step, and rewards staying under ``max_force`` (newtons):
+  ``exp(-scale·max((peak_force − max_force) / max_force, 0)²)``.  Returns 1.0
+  above the head-height threshold so it does not interfere with the standup
+  phase (and is inert outside the rolling window, e.g. for ``soft_landing``'s
+  impact phase, which gates separately on fall *speed* rather than force).
+  """
+  robot = env.scene["robot"]
+  head_idx = robot.find_sites(["head"], preserve_order=True)[0][0]
+  head_z = robot.data.site_pos_w[:, head_idx, 2]
+
+  contact_sensor = env.scene.sensors[sensor_name]
+  force_norm = torch.norm(contact_sensor.data.force, dim=-1)  # [B, N]
+  peak_force = torch.max(force_norm, dim=-1)[0]  # [B]
+
+  excess = torch.clamp((peak_force - max_force) / max_force, min=0.0)
+  shaped = torch.exp(-scale * excess * excess)
   return torch.where(head_z < head_roll_threshold, shaped, torch.ones_like(shaped))
