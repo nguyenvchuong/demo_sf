@@ -77,11 +77,22 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     func=mdp.reset_stand_counter, mode="reset"
   )
 
-  # NOTE: the shared push (±0.5 m/s) is kept as-is. GSI already seeds a fraction
-  # of episodes directly in fallen/rolling poses (the prior's manifold reaches
-  # root_z≈0.12, fully inverted), which is the main roll-to-getup practice — so
-  # we do NOT need an aggressive push, and a strong push only risks contact
-  # blow-ups. Revisit (modestly) only once training is confirmed stable.
+  # Stronger push_robot so the robot is genuinely TOPPLED and must roll to
+  # recover, plus a longer interval so it has time to roll up before the next
+  # push. Overridden locally so other mini tasks keep the gentle shared push.
+  # (Tolerable now that ``diverged`` limits are raised below; play mode strips
+  # the push events, hence the guard.)
+  if "push_robot" in cfg.events:
+    _push = cfg.events["push_robot"]
+    _push.interval_range_s = (2.0, 5.0)  # more recovery time between pushes
+    _push.params["velocity_range"] = {
+      "x": (-1.2, 1.2),
+      "y": (-1.2, 1.2),
+      "z": (-0.6, 0.6),
+      "roll": (-1.0, 1.0),
+      "pitch": (-1.0, 1.0),
+      "yaw": (-1.2, 1.2),
+    }
 
   # --- Rewards -------------------------------------------------------------
   # Ukemi + quick-standup reward (all terms ∈ [0,1], weights sum to 1).
@@ -110,7 +121,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     func=task_smp_product,
     weight=1.0,
     params={
-      "smp_floor": 0.0,
+      "smp_floor": 0.3,
       "task_terms": (
         # Always-on: rotate the torso upright from ANY pose (core getup signal).
         (
@@ -140,9 +151,9 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # flat fall. This is the term that makes it roll when pushed over.
         (
           mdp.proactive_roll,
-          0.20,
+          0.30,
           {
-            "tilt_threshold": 0.01,
+            "tilt_threshold": 0.4,
             "target_ang_vel": 2.0,
             "scale": 0.5,
           },
@@ -190,7 +201,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # task_smp_product) regularise the motion. Kept small so they don't fight the
   # getup/rolling phase; action_rate is the dominant anti-vibration term.
   cfg.rewards["action_rate"] = RewardTermCfg(
-    func=base_mdp.action_rate_l2, weight=-0.01
+    func=base_mdp.action_rate_l2, weight=-0.03
   )
   cfg.rewards["action_acc"] = RewardTermCfg(
     func=base_mdp.action_acc_l2, weight=-0.001
@@ -223,7 +234,7 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # enough and the contact solver runs away to NaN in the actor observation.
   cfg.terminations["diverged"] = TerminationTermCfg(
     func=mdp.diverged,
-    params={"max_lin_speed": 25.0, "max_ang_speed": 40.0},
+    params={"max_lin_speed": 40.0, "max_ang_speed": 60.0},
   )
 
   # Truncate (time_out=True) once stably upright so value bootstraps correctly.
@@ -250,5 +261,10 @@ def mini_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   }
 
   cfg.episode_length_s = 5
+
+  if play:
+    # kéo/giật tay trong viewer tạo velocity spike giả — đừng reset
+    cfg.terminations.pop("diverged", None)
+    cfg.terminations.pop("smp_too_low", None)
 
   return cfg
