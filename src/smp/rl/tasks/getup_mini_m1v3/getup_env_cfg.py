@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mujoco
 from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.envs import mdp as base_mdp
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
@@ -32,7 +33,22 @@ HEAD_POS_IN_TORSO: tuple[float, float, float] = (0.012, 0.0, 0.435)
 # (re-derived) thresholds: 95.6% / 73.5% / 91.2% / 44.1% / 61.8%.
 HEAD_TARGET_HEIGHT: float = 1.15  # track_head_height goal (just below full stand)
 HEAD_UP_THRESHOLD: float = 0.89  # upward_velocity: drive while head below this
-HEAD_STOOD_UP: float = 1.10  # stood_up: success threshold
+# stood_up: success threshold.
+#
+# KNOWN MISCALIBRATION — deliberately left at 1.10 so this task stays comparable
+# with the existing 2026-07-15 baseline run; do NOT "fix" it in isolation.
+# Rolling out the trained policy (64 envs x 1500 steps, model_29000) puts the
+# standing plateau at head p50=1.04 / p75=1.06 / p99=1.07: the robot stands with
+# slightly bent knees (pelvis ~0.63, not the 0.77 keyframe) because
+# ``track_head_height`` is configured with scale=1.0, which makes the reward gap
+# between head 1.06 and the 1.15 target only ~0.8% — far too flat to pay for the
+# extra torque of full extension. So 1.10 sits ABOVE the reachable plateau and
+# the success termination fires on ~0.16% of steps, meaning the ``time_out=True``
+# value bootstrap this term exists for never actually happens.
+# Lowering to ~1.05 (or raising track_head_height's scale) changes the learning
+# dynamics for BOTH this task and getup_mini_m1v3_lag, so it requires re-running
+# both arms of the ablation together.
+HEAD_STOOD_UP: float = 1.10
 # Ukemi-specific thresholds.
 HEAD_FLOOR_THRESHOLD: float = 0.53  # soft_landing: below = impact/contact phase
 HEAD_ROLL_THRESHOLD: float = 0.75  # roll_momentum: below = active rolling phase
@@ -76,6 +92,23 @@ def mini_v3_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     func=mdp.reset_stand_counter, mode="reset"
   )
 
+  # Stronger push_robot so the robot is genuinely TOPPLED and must roll to
+  # recover, plus a longer interval so it has time to roll up before the next
+  # push. Overridden locally so other mini tasks keep the gentle shared push.
+  # (Tolerable now that ``diverged`` limits are raised below; play mode strips
+  # the push events, hence the guard.)
+  if "push_robot" in cfg.events:
+    _push = cfg.events["push_robot"]
+    _push.interval_range_s = (2.0, 5.0)  # more recovery time between pushes
+    _push.params["velocity_range"] = {
+      "x": (-1.2, 1.2),
+      "y": (-1.2, 1.2),
+      "z": (-0.6, 0.6),
+      "roll": (-1.0, 1.0),
+      "pitch": (-1.0, 1.0),
+      "yaw": (-1.2, 1.2),
+    }
+
   # --- Rewards -------------------------------------------------------------
   # Ukemi + quick-standup reward (all terms ∈ [0,1], weights sum to 1).
   #
@@ -103,7 +136,7 @@ def mini_v3_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     func=task_smp_product,
     weight=1.0,
     params={
-      "smp_floor": 0.0,
+      "smp_floor": 0.3,
       "task_terms": (
         # Always-on: rotate the torso upright from ANY pose (core getup signal).
         (
@@ -133,9 +166,9 @@ def mini_v3_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         # flat fall. This is the term that makes it roll when pushed over.
         (
           mdp.proactive_roll,
-          0.20,
+          0.30,
           {
-            "tilt_threshold": 0.01,
+            "tilt_threshold": 0.4,
             "target_ang_vel": 2.0,
             "scale": 0.5,
           },
@@ -175,6 +208,23 @@ def mini_v3_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     },
   )
 
+  # --- Smoothness penalties -------------------------------------------------
+  # The task terms above all saturate to ~1.0 once standing, leaving a flat
+  # reward gradient with nothing penalising high-frequency action/joint
+  # chatter — the robot buzzes/vibrates when settled. These separate
+  # negative-weight terms (summed by the reward manager alongside the [0,1]
+  # task_smp_product) regularise the motion. Kept small so they don't fight the
+  # getup/rolling phase; action_rate is the dominant anti-vibration term.
+  cfg.rewards["action_rate"] = RewardTermCfg(
+    func=base_mdp.action_rate_l2, weight=-0.03
+  )
+  cfg.rewards["action_acc"] = RewardTermCfg(
+    func=base_mdp.action_acc_l2, weight=-0.001
+  )
+  cfg.rewards["joint_vel"] = RewardTermCfg(
+    func=base_mdp.joint_vel_l2, weight=-1e-3
+  )
+
   # --- Terminations --------------------------------------------------------
   # Getup starts from fallen pose — remove self_collision to avoid false
   # triggers from the robot lying on the ground.
@@ -199,7 +249,7 @@ def mini_v3_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # enough and the contact solver runs away to NaN in the actor observation.
   cfg.terminations["diverged"] = TerminationTermCfg(
     func=mdp.diverged,
-    params={"max_lin_speed": 25.0, "max_ang_speed": 40.0},
+    params={"max_lin_speed": 40.0, "max_ang_speed": 60.0},
   )
 
   # Truncate (time_out=True) once stably upright so value bootstraps correctly.
@@ -226,5 +276,10 @@ def mini_v3_getup_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   }
 
   cfg.episode_length_s = 5
+
+  if play:
+    # kéo/giật tay trong viewer tạo velocity spike giả — đừng reset
+    cfg.terminations.pop("diverged", None)
+    cfg.terminations.pop("smp_too_low", None)
 
   return cfg
