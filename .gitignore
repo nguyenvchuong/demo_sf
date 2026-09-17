@@ -16,6 +16,5 @@ wandb/
 outputs/
 datasets/
 dataset_mini/csv
-*.npz
 *.csv
 dataset_mini/
