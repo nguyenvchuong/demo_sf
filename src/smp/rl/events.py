@@ -8,6 +8,8 @@ env-origin-relative frame, so the SMP reward is invariant to env placement.
 
 from __future__ import annotations
 
+import math
+
 import torch
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.utils.lab_api.math import quat_apply, quat_mul, yaw_quat
@@ -261,6 +263,209 @@ def gsi_reset(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None = None) -> No
   idx = torch.randint(0, pool.shape[0], (n,), device=env.device)
   window = pool[idx]
   _prime_sim_and_buffer(env, env_ids, window)
+
+
+@torch.no_grad()
+def reset_drop_in_air(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | None = None,
+  pelvis_height_range: tuple[float, float] = (1.0, 1.8),
+  drop_fraction: float = 1.0,
+  lateral_speed_range: tuple[float, float] = (0.0, 0.0),
+  init_ang_vel_range: tuple[float, float] = (0.0, 0.0),
+  init_z_vel_range: tuple[float, float] = (0.0, 0.0),
+  upright_spawn: bool = False,
+  upright_joint_noise: float = 0.1,
+  forward_backward_only: bool = False,
+  random_yaw_spawn: bool = False,
+  forward_only: bool = False,
+) -> None:
+  """Reset-mode event: respawn envs FLOATING in the air at a RANDOM height holding a
+  RANDOM pose, with optional lateral velocity so the robot falls at an angle.
+
+  Must run AFTER ``gsi_reset`` (it overrides GSI's placement for the chosen envs).
+  A ``drop_fraction`` subset is sampled fresh from the GSI pool — giving the random
+  joint configuration / orientation (``các dáng ngẫu nhiên``, same source as the
+  getup task) — then the window is rewritten so that:
+    * the root world-z of EVERY frame is set to a per-env height sampled uniformly
+      from ``pelvis_height_range`` (the ``độ cao ngẫu nhiên``), and
+    * a random HORIZONTAL velocity is injected in a uniformly-random direction with
+      speed ∈ ``lateral_speed_range`` [m/s] — making the robot fall diagonally,
+      which gives it forward angular momentum and makes ukemi rolling much easier
+      to learn than from a pure vertical drop, and
+    * an initial ANGULAR velocity ∈ ``init_ang_vel_range`` [rad/s] is injected
+      about the axis perpendicular to the lateral velocity (coordinated so the
+      rotation is in the fall direction, pre-loading the shoulder roll), and
+    * an initial DOWNWARD velocity ∈ ``init_z_vel_range`` [m/s] is injected on
+      the world-z axis (negative = down) — simulating a hard throw rather than a
+      passive free-fall, so the robot arrives at the ground with higher impact
+      energy and must roll to absorb it, and
+    * if ``upright_spawn`` the root orientation is overridden to UPRIGHT (feet
+      pointing down) and the joints to the default landing-ready crouch (with
+      ±``upright_joint_noise`` rad of noise) — so the robot can land FEET-FIRST
+      and then roll, instead of catching the fall on its back,
+    * if ``random_yaw_spawn`` (requires ``upright_spawn``) the upright orientation
+      is additionally given a uniformly-random yaw angle ∈ [0, 2π] so the robot
+      faces a different direction every episode, adding 360° rotational variety
+      while keeping the feet-down stance intact,
+    * if ``forward_backward_only`` the lateral throw direction is constrained to
+      the robot's local forward (+x) or backward (-x) axis chosen randomly, so
+      the impact and roll are always along the robot's sagittal plane — the only
+      axis a natural ukemi roll can absorb.  Combined with ``random_yaw_spawn``
+      this gives full 360° directional variety in world-frame while keeping the
+      throw semantically forward/backward in the robot's frame every episode.
+  so the primed sim + SMP buffer describe the pose at that height with those
+  initial velocities.  Under gravity the robot then free-falls, tilts, and learns
+  to roll on touchdown (``update_landed_latch`` flips ``env._drop_landed``).
+
+  Side effects stashed on ``env`` for the reward/latch:
+    * ``env._drop_spawn_joint_pos`` — the spawn joint configuration the policy must
+      hold while airborne (read by ``hold_initial_pose``).
+    * ``env._drop_landed`` — per-env "has touched the ground" latch, reset to False
+      here and OR-accumulated each step by ``update_landed_latch``.
+  """
+  if env_ids is None:
+    env_ids = torch.arange(env.num_envs, device=env.device)
+  n = int(env_ids.numel())
+  if n == 0:
+    return
+
+  robot = env.scene["robot"]
+  num_joints = robot.data.joint_pos.shape[-1]
+  if not hasattr(env, "_drop_spawn_joint_pos"):
+    env._drop_spawn_joint_pos = torch.zeros(  # type: ignore[attr-defined]
+      env.num_envs, num_joints, device=env.device
+    )
+  if not hasattr(env, "_drop_landed"):
+    env._drop_landed = torch.zeros(  # type: ignore[attr-defined]
+      env.num_envs, dtype=torch.bool, device=env.device
+    )
+  # The landed latch always resets for the whole reset batch (even envs left on GSI).
+  env._drop_landed[env_ids] = False  # type: ignore[attr-defined]
+
+  # Per-env Bernoulli selection so it works for any num_envs (incl. play's 1 env).
+  if drop_fraction >= 1.0:
+    drop_ids = env_ids
+  else:
+    drop_ids = env_ids[torch.rand(n, device=env.device) < drop_fraction]
+  k = int(drop_ids.numel())
+  if k == 0:
+    return
+
+  pool: torch.Tensor = env._smp_gsi_pool  # type: ignore[attr-defined]
+  idx = torch.randint(0, pool.shape[0], (k,), device=env.device)
+  window = pool[idx].clone()  # [k, W, F]
+
+  # root_pos world-z is feature index 2 (see feature_to_state.slice_features).
+  lo, hi = pelvis_height_range
+  height = lo + (hi - lo) * torch.rand(k, device=env.device)
+  window[..., 2] = height[:, None]
+
+  # UPRIGHT SPAWN: override the (possibly inverted) sampled orientation with an
+  # upright one so the robot falls feet-down and can land FEET-FIRST. root_rot is
+  # the 6D [col0=x-axis, col2=z-axis] of the rotation matrix.
+  # With random_yaw_spawn the yaw is drawn uniformly from [0, 2π] so the robot
+  # faces a different direction every episode — 6D = [cos θ, sin θ, 0, 0, 0, 1].
+  # Without random_yaw_spawn identity (robot faces world +x) is used.
+  spawn_yaw = torch.zeros(k, device=env.device)  # default: face world +X
+  if upright_spawn:
+    J_ = NUM_JOINTS
+    if random_yaw_spawn:
+      spawn_yaw = 2.0 * math.pi * torch.rand(k, device=env.device)  # [k]
+    rot_6d = torch.zeros(k, 6, device=env.device, dtype=window.dtype)
+    rot_6d[:, 0] = torch.cos(spawn_yaw)  # col0_x (robot forward, world x-component)
+    rot_6d[:, 1] = torch.sin(spawn_yaw)  # col0_y (robot forward, world y-component)
+    rot_6d[:, 5] = 1.0                    # col2_z = 1 (up axis unchanged)
+    window[..., 3:9] = rot_6d[:, None, :]
+    default_jp = robot.data.default_joint_pos[drop_ids]  # [k, J]
+    if upright_joint_noise > 0.0:
+      noise = (2.0 * torch.rand_like(default_jp) - 1.0) * upright_joint_noise
+      default_jp = default_jp + noise
+    window[..., 9 : 9 + J_] = default_jp[:, None, :]
+
+  # Zero the root linear+angular velocity features, then inject lateral + angular
+  # velocity so the robot falls diagonally and pre-rotates toward a shoulder roll.
+  # Feature layout (feature_to_state.slice_features):
+  #   [0:9]  root_pos(3) + root_rot_6d(6)
+  #   [9:32] joint_pos (J=23)
+  #   [32:47] ee_pos (E=5 × 3)
+  #   [47:50] root_lin_vel (x, y, z)  ← lin_start = 9+J+E*3 = 47
+  #   [50:53] root_ang_vel (x, y, z)
+  J, E = NUM_JOINTS, NUM_EE
+  lin_start = 9 + J + E * 3  # = 47
+  window[..., lin_start : lin_start + 6] = 0.0
+
+  # LATERAL VELOCITY: throw direction in world XY.
+  # forward_backward_only=True → throw along ±robot-forward (spawn_yaw or spawn_yaw+π)
+  #   so impact and roll are always in the robot's sagittal plane — the only axis a
+  #   ukemi roll can absorb.  Combined with random_yaw_spawn this gives full 360°
+  #   world-frame variety while keeping the throw forward/backward in robot frame.
+  # forward_backward_only=False → uniformly random direction (original behaviour).
+  lo_v, hi_v = lateral_speed_range
+  if hi_v > 0.0:
+    speed = lo_v + (hi_v - lo_v) * torch.rand(k, device=env.device)
+    if forward_backward_only:
+      if forward_only:
+        # Always throw forward (along spawn_yaw, never backward).
+        angle = spawn_yaw.clone()
+      else:
+        # Each env randomly picks forward (0) or backward (π) relative to spawn_yaw.
+        flip = torch.randint(0, 2, (k,), device=env.device).float() * math.pi
+        angle = spawn_yaw + flip
+    else:
+      angle = 2.0 * math.pi * torch.rand(k, device=env.device)
+    vx = speed * torch.cos(angle)   # world x
+    vy = speed * torch.sin(angle)   # world y
+    window[:, :, lin_start] = vx[:, None]
+    window[:, :, lin_start + 1] = vy[:, None]
+
+    # INITIAL ANGULAR VELOCITY: ∈ init_ang_vel_range rad/s about the axis
+    # perpendicular to the lateral velocity → rotates in the fall direction,
+    # pre-loading the shoulder roll before touchdown.
+    # Perpendicular to (cos θ, sin θ) in world xy = (-sin θ, cos θ, 0).
+    lo_w, hi_w = init_ang_vel_range
+    if hi_w > 0.0:
+      ang_speed = lo_w + (hi_w - lo_w) * torch.rand(k, device=env.device)
+      window[:, :, lin_start + 3] = (ang_speed * (-torch.sin(angle)))[:, None]
+      window[:, :, lin_start + 4] = (ang_speed * torch.cos(angle))[:, None]
+
+  # DOWNWARD VELOCITY: ∈ init_z_vel_range m/s, always negative (downward).
+  # Independent of lateral_speed so it can be set even with no horizontal throw.
+  lo_z, hi_z = init_z_vel_range
+  if hi_z > 0.0:
+    z_speed = lo_z + (hi_z - lo_z) * torch.rand(k, device=env.device)
+    window[:, :, lin_start + 2] = -z_speed[:, None]
+
+  _prime_sim_and_buffer(env, drop_ids, window)
+
+  # Record the pose just written to sim as the target the policy must hold midair.
+  env._drop_spawn_joint_pos[drop_ids] = robot.data.joint_pos[drop_ids].clone()  # type: ignore[attr-defined]
+
+
+@torch.no_grad()
+def update_landed_latch(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | None = None,
+  sensor_name: str = "ground_contact_force",
+  force_threshold: float = 5.0,
+) -> None:
+  """Step-mode event: detect the ground touchdown and LATCH it per env.
+
+  Reads the robot-vs-terrain contact-force sensor and flips ``env._drop_landed``
+  to True (sticky) once the peak contact force exceeds ``force_threshold`` newtons.
+  This is the "phát hiện chạm đất" signal that switches the reward from the airborne
+  hold-pose phase to the ukemi roll + getup phase. Using the contact sensor is more
+  robust than inferring contact from joint deltas (a PD-tracked joint barely moves
+  on a soft touch), and the env already carries the sensor for ``rolling_contact_force``.
+  """
+  del env_ids
+  if not hasattr(env, "_drop_landed"):
+    env._drop_landed = torch.zeros(  # type: ignore[attr-defined]
+      env.num_envs, dtype=torch.bool, device=env.device
+    )
+  sensor = env.scene.sensors[sensor_name]
+  peak_force = torch.norm(sensor.data.force, dim=-1).max(dim=-1)[0]  # [B]
+  env._drop_landed |= peak_force > force_threshold  # type: ignore[attr-defined]
 
 
 @torch.no_grad()

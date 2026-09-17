@@ -1,8 +1,8 @@
 """Reward components for the ukemi + getup task.
 
-Phase structure (Mini ~1.13 m standing head height):
-  Phase 1 — impact    (head < ~0.50 m): ``soft_landing``   rewards low fall speed
-  Phase 1–2 — rolling (head < ~0.70 m): ``roll_momentum``  rewards active rolling
+Phase structure (Mini ~0.68 m standing head height):
+  Phase 1 — impact    (head < ~0.30 m): ``soft_landing``   rewards low fall speed
+  Phase 1–2 — rolling (head < ~0.42 m): ``roll_momentum``  rewards active rolling
   Phase 2–3 — standup (head rising):    ``upward_velocity`` + ``track_head_height``
 
 All phase terms return 1.0 outside their active window so they do not compete.

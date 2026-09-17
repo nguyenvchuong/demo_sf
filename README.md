@@ -92,8 +92,8 @@ uv run scripts/npz_to_csv.py dir --input-dir data_mini_npz/ --output-dir data_mi
 
 ```bash
 uv run scripts/csv_to_npz_mini.py \
-  --input-dir dataset_mini/roll_and_run_csv \
-  --output-dir dataset_mini/roll_and_run_npz
+  --input-dir dataset_mini/csv \
+  --output-dir dataset_mini/npz
 ```
 For each CSV this replays the motion through the G1 sim, forward-kinematics the
 tracked end-effectors, interpolates 30 → 50 fps, and slices the result into
@@ -157,10 +157,13 @@ uv run scripts/pretrain.py \
   --data-dir dataset_mini/npz_gu \
   --norm-stats-file dataset_mini/norm_stats.npz
 # Train (checkpoints land under logs/)
-uv run scripts/train.py Smp-Getup-mini --env.scene.num-envs=4096
-
+uv run scripts/train.py Smp-Air-Drop-mini --env.scene.num-envs=4096
 # Play a trained policy from a W&B run
-uv run scripts/play.py Smp-Getup-mini --checkpoint-file logs/rsl_rl/smp_getup_mini/2026-07-07_20-54-36_smp_getup_mini/model_15000.pt --num-envs 1
+uv run scripts/play.py Smp-Air-Drop-mini --checkpoint-file logs/rsl_rl/smp_air_drop_mini/2026-06-26_19-31-59_smp_air_drop_mini/model_3000.pt --num-envs 1
+
+uv run scripts/play.py --to-onnx \
+  --task Smp-Air-Drop-mini \
+  --checkpoint-file logs/rsl_rl/smp_air_drop_mini/2026-06-26_19-31-59_smp_air_drop_mini/model_3000.pt
 ```
 
 Swap the task id for any of the four. Because the priors are shipped and already

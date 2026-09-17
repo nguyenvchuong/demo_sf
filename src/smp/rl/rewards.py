@@ -94,8 +94,9 @@ def task_smp_product(
   fixed_timesteps: tuple[int, ...] = (8, 15, 22),
   ws: float = 6.0,
   smp_floor: float = 0.0,
+  smp_floor_grounded: float | None = None,
 ) -> torch.Tensor:
-  """``(Σ wᵢ · taskᵢ(env)) · gate`` where ``gate = smp_floor + (1−smp_floor)·r_smp``.
+  """``(Σ wᵢ · taskᵢ(env)) · gate`` where ``gate = floor + (1−floor)·r_smp``.
 
   ``task_terms`` is a tuple of ``(func, weight, kwargs)``.  Calls
   ``smp_guidance_reward`` once (the sole SMP-buffer update), so it must be the
@@ -107,8 +108,31 @@ def task_smp_product(
       always a task-reward gradient (essential for getup/recovery, where the
       starting pose is *necessarily* off the prior's manifold), while on-manifold
       motion still earns the full ``×1`` style bonus.
+
+  ``smp_floor_grounded`` (optional) makes the floor PHASE-DEPENDENT for the
+  air-drop task: envs that have touched the ground (``env._drop_landed`` True)
+  use this lower floor instead of ``smp_floor``.  Rationale: while AIRBORNE a
+  rigid pose-hold is necessarily off-manifold, so a HIGH floor keeps that
+  gradient alive; once GROUNDED we WANT the roll→stand prior to dominate, so a
+  LOW floor makes lying-still-off-manifold earn almost nothing — the only way to
+  collect reward is to roll and stand up (both on-manifold).  Ignored (falls back
+  to ``smp_floor``) when the env has no ``_drop_landed`` latch.
   """
   task = sum(w * func(env, **kw) for func, w, kw in task_terms)
   r_smp = smp_guidance_reward(env, fixed_timesteps=fixed_timesteps, ws=ws)
-  gate = smp_floor + (1.0 - smp_floor) * r_smp
+
+  if smp_floor_grounded is not None:
+    landed = getattr(env, "_drop_landed", None)
+    if landed is not None:
+      floor = torch.where(
+        landed,
+        torch.full_like(r_smp, smp_floor_grounded),
+        torch.full_like(r_smp, smp_floor),
+      )
+    else:
+      floor = smp_floor
+  else:
+    floor = smp_floor
+
+  gate = floor + (1.0 - floor) * r_smp
   return task * gate

@@ -17,10 +17,6 @@ from smp.robot.Mini_M1v1 import (
   get_mini_m1v1_robot_cfg,
   MINI_M1V1_ACTION_SCALE
 )
-from smp.robot.Mini_M1v3 import (
-  get_mini_m1v3_robot_cfg,
-  MINI_M1V3_ACTION_SCALE
-)
 from mjlab.envs import ManagerBasedRlEnvCfg, mdp
 from mjlab.envs.mdp import dr, time_out
 from mjlab.envs.mdp.actions import JointPositionActionCfg
@@ -32,7 +28,6 @@ from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.scene import SceneCfg
-from mjlab.sensor import BuiltinSensor
 from mjlab.sensor.contact_sensor import ContactMatch, ContactSensorCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.tasks.velocity.mdp import illegal_contact
@@ -98,19 +93,6 @@ class MiniSmpSceneCfg(SceneCfg):
   sensors: tuple = field(default_factory=lambda: (MINI_SELF_COLLISION,))
 
 
-@dataclass(kw_only=True)
-class MiniV3SmpSceneCfg(SceneCfg):
-  """Scene configuration for the Mini_M1v3 + SMP guidance environment."""
-
-  num_envs: int = 1
-  extent: float = 2.0
-  terrain: TerrainEntityCfg | None = field(
-    default_factory=lambda: TerrainEntityCfg(terrain_type="plane")
-  )
-  entities: dict = field(default_factory=lambda: {"robot": get_mini_m1v3_robot_cfg()})
-  sensors: tuple = field(default_factory=lambda: (MINI_SELF_COLLISION,))
-
-
 def make_smp_viewer() -> ViewerConfig:
   """Shared viewer configuration following the robot's torso."""
   return ViewerConfig(
@@ -134,19 +116,6 @@ def make_smp_sim() -> SimulationCfg:
       ls_iterations=20,
     ),
   )
-
-
-def projected_gravity_imu(env, sensor_name: str = "robot/imu_lin_acc"):
-  """Estimate projected gravity from an IMU accelerometer sensor.
-
-  Computes ``-accelerometer_reading / 9.81``, matching the deployed FSM's
-  MQEKF-derived ``-aBody / 9.81`` (see vm_ctrl FSMState_*.cpp) so the policy
-  trains on the same gravity-direction signal it sees at runtime, instead of
-  the ground-truth quaternion-rotated gravity vector.
-  """
-  sensor = env.scene[sensor_name]
-  assert isinstance(sensor, BuiltinSensor)
-  return -sensor.data / 9.81
 
 
 def make_g1_smp_observations() -> dict[str, ObservationGroupCfg]:
@@ -207,15 +176,8 @@ def make_mini_smp_observations() -> dict[str, ObservationGroupCfg]:
       params={"sensor_name": "robot/imu_ang_vel"},
       noise=Unoise(n_min=-0.2, n_max=0.2),
     ),
-    # "projected_gravity": ObservationTermCfg(
-    #   func=mdp.projected_gravity,
-    #   noise=Unoise(n_min=-0.05, n_max=0.05),
-    # ),
-    # Accelerometer-derived projected gravity (-aBody/9.81), matching the
-    # deployed FSM's MQEKF estimate instead of ground-truth quat rotation.
     "projected_gravity": ObservationTermCfg(
-      func=projected_gravity_imu,
-      params={"sensor_name": "robot/imu_lin_acc"},
+      func=mdp.projected_gravity,
       noise=Unoise(n_min=-0.05, n_max=0.05),
     ),
     "joint_pos": ObservationTermCfg(
@@ -265,18 +227,6 @@ def make_mini_smp_actions() -> dict[str, ActionTermCfg]:
       entity_name="robot",
       actuator_names=(".*",),
       scale=MINI_M1V1_ACTION_SCALE,
-      use_default_offset=True,
-    )
-  }
-
-
-def make_mini_v3_smp_actions() -> dict[str, ActionTermCfg]:
-  """Mini_M1v3 + SMP action specification."""
-  return {
-    "joint_pos": JointPositionActionCfg(
-      entity_name="robot",
-      actuator_names=(".*",),
-      scale=MINI_M1V3_ACTION_SCALE,
       use_default_offset=True,
     )
   }
@@ -386,31 +336,6 @@ def make_mini_smp_events() -> dict[str, EventTermCfg]:
           "pitch": (-0.52, 0.52),
           "yaw": (-0.78, 0.78),
         },
-      },
-    ),
-    # Sustained external pushes with randomized strength AND duration. Force
-    # magnitude and impulse length are sampled INDEPENDENTLY per impulse, so a
-    # single event continuously spans every regime the getup/rolling policy must
-    # be robust to: strong+short (sharp shove), strong+long (sustained hard push
-    # that tips the robot over → roll → get up), weak+short (minor balance
-    # nudge), weak+long (slow lean/drift). The robot is not free-floating — feet
-    # are planted and actuators + ground friction resist — so it genuinely
-    # fights each push and only loses balance on the harder samples.
-    #
-    # body_point_offset lifts the application point 25 cm above the torso CoM:
-    # cross(offset, force) adds a tipping torque so horizontal pushes ROLL the
-    # robot rather than just sliding it, which is the disturbance getup must
-    # recover from. Mini total mass ~35 kg (torso ~10 kg).
-    "push_impulse": EventTermCfg(
-      func=mdp.apply_body_impulse,
-      mode="step",
-      params={
-        "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
-        "force_range": (-200.0, 200.0),   # N/component: ~0 (weak) → 200 (strong)
-        "torque_range": (-20.0, 20.0),    # Nm: extra spin to provoke rolling
-        "duration_s": (0.05, 1.0),        # short snap → long sustained lean
-        "cooldown_s": (1.5, 4.0),         # recovery gap (getup needs settle time)
-        "body_point_offset": (0.0, 0.0, 0.25),
       },
     ),
     "foot_friction": EventTermCfg(
@@ -530,35 +455,10 @@ class MiniSmpEnvCfg(ManagerBasedRlEnvCfg):
   episode_length_s: float = 20.0
 
 
-@dataclass(kw_only=True)
-class MiniV3SmpEnvCfg(ManagerBasedRlEnvCfg):
-  """Configuration for the Mini_M1v3 + SMP guidance environment.
-
-  Observations/events/terminations are shared with Mini_M1v1 (no robot-specific
-  coupling beyond the generic ``"robot"``/``"torso_link"`` names, which both
-  robots share) — only the scene entity and action scale differ per robot.
-
-  Rewards are intentionally left empty: each task adds its own
-  ``task_smp_product`` term (task reward x SMP guidance).
-  """
-
-  scene: MiniV3SmpSceneCfg = field(default_factory=MiniV3SmpSceneCfg)
-  observations: dict = field(default_factory=make_mini_smp_observations)
-  actions: dict = field(default_factory=make_mini_v3_smp_actions)
-  events: dict = field(default_factory=make_mini_smp_events)
-  rewards: dict = field(default_factory=dict)
-  terminations: dict = field(default_factory=make_mini_smp_terminations)
-  viewer: ViewerConfig = field(default_factory=make_smp_viewer)
-  sim: SimulationCfg = field(default_factory=make_smp_sim)
-  decimation: int = 4
-  episode_length_s: float = 20.0
-
-
 def _apply_play_overrides(cfg: ManagerBasedRlEnvCfg) -> None:
   """Strip training-only events and shrink the SMP buffer for play mode."""
   cfg.episode_length_s = int(1e9)
   cfg.events.pop("push_robot", None)
-  cfg.events.pop("push_impulse", None)
   cfg.events.pop("gsi_refresh", None)
   cfg.events["init_smp_state"].params["compile_model"] = False
   cfg.events["init_smp_state"].params["gsi_buffer_size"] = 1024
@@ -577,15 +477,6 @@ def mini_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """Build the shared Mini + SMP env cfg (denoiser ckpt path set on
   ``init_smp_state`` below; override it from the task config)."""
   cfg = MiniSmpEnvCfg()
-  if play:
-    _apply_play_overrides(cfg)
-  return cfg
-
-
-def mini_v3_smp_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  """Build the shared Mini_M1v3 + SMP env cfg (denoiser ckpt path set on
-  ``init_smp_state`` below; override it from the task config)."""
-  cfg = MiniV3SmpEnvCfg()
   if play:
     _apply_play_overrides(cfg)
   return cfg
